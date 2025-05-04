@@ -184,6 +184,7 @@ for dmm_key, dmm_value in dmm_dict.items():
     if dmm_title in hitomi_title_map:
         for hitomi_key in hitomi_title_map[dmm_title]:
             matched_dmm_urls.append((dmm_key, hitomi_key))
+print(matched_dmm_urls)
 
 # client = requests.Session()
 # client.get(AGE_CHECK_URL)
