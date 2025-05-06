@@ -205,11 +205,13 @@ async def main():
     for hitomi_key, hitomi_value in hitomi_dict.items():
         title = hitomi_value.get("japanese_title") or hitomi_value.get("title")
         if title:
+            title = title.replace(" ", "")
             hitomi_title_map.setdefault(title, []).append(hitomi_key)
 
     matched_dmm_urls = []
     for dmm_key, dmm_value in dmm_dict.items():
         dmm_title = dmm_value.get("title")
+        dmm_title = dmm_title.replace(" ", "")
         if dmm_title in hitomi_title_map:
             for hitomi_key in hitomi_title_map[dmm_title]:
                 matched_dmm_urls.append((dmm_key, hitomi_key))
