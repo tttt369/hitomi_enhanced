@@ -52,9 +52,10 @@ async def process_sitemap_index(session, sitemap_index, dir, dmm=False) -> list[
     root = etree.fromstring(sitemap_index_content)
     if dmm:
         sitemap_urls = [loc.text for loc in root.findall(".//default:loc", DMM_NS)]
+        print("Found", len(sitemap_urls), "dmm sitemaps.")
     else:
         sitemap_urls = [loc.text for loc in root.findall(".//sitemap:loc", HITOMI_NS)]
-    print("Found", len(sitemap_urls), "hitomi sitemaps.")
+        print("Found", len(sitemap_urls), "hitomi sitemaps.")
     return sitemap_urls
 
 
@@ -71,7 +72,7 @@ async def process_sitemap(session, sitemap_urls, dmm=False) -> list[str]:
                 print("Found x03 character in dmmsitemap:", os.path.basename(sitemap_url))
                 content = content.replace(b'\x03', b'')
             root = etree.fromstring(content)
-            urls = [loc.text for loc in root.findall('.//default:url', DMM_NS)]
+            urls = [loc for loc in root.findall('.//default:url', DMM_NS)]
         else:
             root = etree.fromstring(content)
             urls = []
@@ -84,32 +85,38 @@ async def process_sitemap(session, sitemap_urls, dmm=False) -> list[str]:
     print("Number of 'url' elements found:", len(found_urls))
     return found_urls
 
-async def process_js(session, valid_gallery_urls) -> Dict[str, Any]:
+async def process_js(session, valid_gallery_urls):
     hitomi_dict = {}
-    tasks = []
-    json_id = None
-    js_url = None
-    for url in valid_gallery_urls:
-        json_id = ID_REGEX.search(url).group(1)
-        js_url = f"https://ltn.gold-usergeneratedcontent.net/galleries/{json_id}.js"
-        tasks.append(get_js_content(session, js_url, LOCAL_JS_DIR))
-    results = await asyncio.gather(*tasks)
-    for js_content in results:
-        json_match = JSON_REGEX.search(js_content)
-        data = json.loads(json_match.group(1))
-        artists = data.get("artists")
-        artist_name = artists[0].get("artist") if isinstance(artists, list) else artists
-        file_count = len(data.get("files", []))
-        hitomi_dict[json_id] = {
-            "artists": artist_name,
-            "japanese_title": data["japanese_title"],
-            "title": data["title"],
-            "pages": file_count
-        }
-    print()
+    skiped = 0
+    for i in range(0, len(valid_gallery_urls), JS_BATCH_SIZE):
+        tasks = []
+        batch = valid_gallery_urls[i:(i + JS_BATCH_SIZE)]
+        for url in batch:
+            json_id = ID_REGEX.search(url).group(1)
+            js_url = f"https://ltn.gold-usergeneratedcontent.net/galleries/{json_id}.js"
+            tasks.append(get_js_content(session, js_url, LOCAL_JS_DIR))
+        results = await asyncio.gather(*tasks)
+        for js_content in results:
+            json_match = JSON_REGEX.search(js_content)
+            if json_match:
+                data = json.loads(json_match.group(1))
+                artists = data.get("artists")
+                json_id = data.get("id")
+                artist_name = artists[0].get("artist") if isinstance(artists, list) else artists
+                file_count = len(data.get("files", []))
+                hitomi_dict[json_id] = {
+                    "artists": artist_name,
+                    "japanese_title": data["japanese_title"],
+                    "title": data["title"],
+                    "pages": file_count
+                }
+            else:
+                skiped +=1
     print("Extracted data for", len(hitomi_dict), "galleries.")
+    print("skip", skiped, "galleries.")
     await write_json(HITOMI_JSON_PATH, hitomi_dict)
     return hitomi_dict
+
 
 async def write_json(path, content):
     with open(path, "w", encoding="utf-8") as f:
@@ -128,9 +135,6 @@ async def make_dmm_json(found_urls) -> Dict[str, Any]:
         }
     await write_json(DMM_JSON_PATH, dmm_dict)
     return dmm_dict
-
-
-
 
 
 async def get_sitemap_content(session, url, dir=None) -> bytes:
@@ -159,12 +163,12 @@ async def get_js_content(session, url, dir=None) -> str:
         if os.path.exists(path):
             local_path = os.path.join(dir, filename)
             async with aiofiles.open(local_path, "r") as f:
-                print("read from local", local_path)
+                # print("read from local", local_path)
                 return await f.read()
 
     async with session.get(url) as response:
-        content = await response.read()
-
+        bytes_content = await response.read()
+        content = bytes_content.decode("utf-8")
         if DOWNLOAD_JS and dir:
             local_path = os.path.join(dir, filename)
             if not os.path.exists(local_path): 
@@ -193,7 +197,7 @@ async def main():
         sitemap_urls = []
         found_urls = []
         async with aiohttp.ClientSession() as session:
-            sitemap_urls = await process_sitemap_index(session, DMM_SITEMAP_INDEX_URL, SITEMAP_DIR)
+            sitemap_urls = await process_sitemap_index(session, DMM_SITEMAP_INDEX_URL, SITEMAP_DIR, dmm=True)
             found_urls = await process_sitemap(session, sitemap_urls, dmm=True)
             dmm_dict = await make_dmm_json(found_urls)
 
@@ -209,7 +213,8 @@ async def main():
         if dmm_title in hitomi_title_map:
             for hitomi_key in hitomi_title_map[dmm_title]:
                 matched_dmm_urls.append((dmm_key, hitomi_key))
-    print(matched_dmm_urls)
+    print(len(matched_dmm_urls))
+
 
 if __name__ == "__main__":
     asyncio.run(main())
