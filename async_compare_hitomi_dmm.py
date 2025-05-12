@@ -5,7 +5,9 @@ import asyncio
 import aiohttp
 import aiofiles
 from lxml import etree
+from lxml import html
 from tqdm.asyncio import tqdm
+from aiohttp import ClientResponseError
 from typing import Optional, List, Tuple, Dict, Any
 
 # Configuration
@@ -13,7 +15,7 @@ DOWNLOAD_SITEMAP = False
 READ_LOCAL_SITEMAP = False
 DOWNLOAD_JS = True
 READ_LOCAL_JS = True
-READ_FROM_OUTPUT = False
+READ_FROM_OUTPUT = True
 
 SITEMAP_DIR = "/home/asdf/Documents/hitomi/tools2/sitemap"
 LOCAL_JS_DIR = "/home/asdf/Documents/hitomi/urls/id_js"
@@ -61,7 +63,9 @@ async def process_sitemap_index(session, sitemap_index, dir, dmm=False) -> list[
 
 async def process_sitemap(session, sitemap_urls, dmm=False) -> list[str]:
     found_urls = []
+    count=[]
     tasks = []
+    print(dmm)
     for sitemap_url in sitemap_urls:
         tasks.append(get_sitemap_content(session, sitemap_url, SITEMAP_DIR))
     results = await asyncio.gather(*tasks)
@@ -78,10 +82,12 @@ async def process_sitemap(session, sitemap_urls, dmm=False) -> list[str]:
             urls = []
             for loc in root.findall(".//urlset:loc", HITOMI_NS):
                 url = loc.text
+                count.append("a")
                 if SEARCH_STRING in url and ("doujinshi" in url or "manga" in url) and ID_REGEX.search(url):
                     urls.append(url)
         found_urls.extend(urls)
         print(sitemap_url)
+    print("found", len(count))
     print("Number of 'url' elements found:", len(found_urls))
     return found_urls
 
@@ -135,6 +141,78 @@ async def make_dmm_json(found_urls) -> Dict[str, Any]:
         }
     await write_json(DMM_JSON_PATH, dmm_dict)
     return dmm_dict
+
+
+
+
+
+
+
+async def scrape_dmm(client, hitomi_dict, dmm_dict, url, hitomi_key):
+    result_dict = {}
+
+    async with client.get(url) as response:
+        try:
+            response.raise_for_status()
+            text = await response.text()
+        except ClientResponseError as e:
+            if e.status == 404:
+                print(url)
+                return {}
+            else:
+                raise
+
+    tree = html.fromstring(text)
+    title = tree.xpath('//title/text()')[0]  # 最初のtitle要素のテキストを取得
+
+    match = re.match(r'([^()]+)\(([^()]+)\)(.*)', title)
+    artist_name = match.group(2) if match else ""
+
+    # "u-common__ico--review" を含む要素をXPathで取得
+    star_element = tree.xpath("//*[contains(@class, 'u-common__ico--review')]")
+    stars = None
+    if star_element:
+        star_class = star_element[0].get("class", "")
+        raw_stars = re.search(r"u-common__ico--review([0-5][0-5])", star_class)
+        if raw_stars:
+            stars = raw_stars.group(1)
+
+    # "userReview__txt" クラスを持つ<span>要素をXPathで取得
+    num_stars = None
+    num_stars_element = tree.xpath('//span[@class="userReview__txt"]')
+    if num_stars_element:
+        raw_text = num_stars_element[0].text_content()
+        num_stars = re.sub(r'\s+|[()件]', '', raw_text)
+
+    if num_stars == "-":
+        num_stars = 1
+
+    hitomi_dict[hitomi_key].update({
+        "dmm_url": url,
+        "dmm_artist_name": artist_name,
+        "dmm_title": dmm_dict[url]["title"],
+        "stars": stars,
+        "num_stars": num_stars
+    })
+
+    result_dict[hitomi_key] = hitomi_dict[hitomi_key]
+
+    print(hitomi_dict[hitomi_key])
+    return result_dict
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 async def get_sitemap_content(session, url, dir=None) -> bytes:
@@ -208,6 +286,7 @@ async def main():
             title = title.replace(" ", "")
             hitomi_title_map.setdefault(title, []).append(hitomi_key)
 
+    # dict_result = {}
     matched_dmm_urls = []
     for dmm_key, dmm_value in dmm_dict.items():
         dmm_title = dmm_value.get("title")
@@ -215,8 +294,50 @@ async def main():
         if dmm_title in hitomi_title_map:
             for hitomi_key in hitomi_title_map[dmm_title]:
                 matched_dmm_urls.append((dmm_key, hitomi_key))
-    print(len(matched_dmm_urls))
+                # dict_result[str(dmm_key)] = str(hitomi_key)
+    # await write_json("result.json", dict_result)
+    # print((matched_dmm_urls))
 
+
+    # matched_dmm_urls = matched_dmm_urls[:40]
+    # async with aiohttp.ClientSession() as session:
+    #     session.cookie_jar.update_cookies({'age_check_done': '1'})
+    #     async with session.get(AGE_CHECK_URL) as response:
+    #         result_dict = {}
+    #         for i in range(len(matched_dmm_urls), 20):
+    #             tasks = []
+    #             batch = matched_dmm_urls[i:(i + 20)]
+    #             print(batch)
+    #             for url, id in batch:
+    #                 tasks.append(scrape_dmm(response, hitomi_dict, dmm_dict, url, id))
+    #             result_dict = await asyncio.gather(*tasks)
+    # print(result_dict)
+
+    if os.path.exists("final_result.json"):
+        result_dict = await load_local_json("final_result.json")
+        matched_dmm_urls = matched_dmm_urls[len(result_dict):]
+        print("continue from ", len(result_dict))
+    else:
+        result_dict = {}
+
+    # matched_dmm_urls = matched_dmm_urls[:40]
+    async with aiohttp.ClientSession() as session:
+        session.cookie_jar.update_cookies({'age_check_done': '1'})
+        async with session.get(AGE_CHECK_URL) as resp:
+            await resp.text()
+        for i in range(0, len(matched_dmm_urls), 15):
+            batch = matched_dmm_urls[i:i+15]
+            tasks = [
+                #skip 'https://www.dmm.co.jp/dc/doujin/-/detail/=/cid=d_226799/' 233103
+                scrape_dmm(session, hitomi_dict, dmm_dict, url, id)
+                for url, id in batch
+            ]
+            batch_results = await asyncio.gather(*tasks)
+            for res in batch_results:
+                result_dict.update(res)
+            await write_json("final_result.json", result_dict)
+    await write_json("final_result.json", result_dict)
+    print(result_dict)
 
 if __name__ == "__main__":
     asyncio.run(main())
