@@ -125,6 +125,9 @@
             .tag-picker-btn { margin-right: auto; }
             .highlighted-tag { border: 2px solid yellow !important; }
             .sticky-navbar button { font-size: 14px; }
+            .numstar-container { display: flex; gap: 10px; align-items: center; margin-top: 5px; }
+            .star { margin: 0; display: flex; gap: 3px; color: #ffc107; }
+            .star i { font-size: 14px; }
 
             /* ナビゲーションと検索エリアの調整 */
             .navbar-collapse { 
@@ -188,10 +191,20 @@
         div_header_sort_select: null
     };
 
-    async function observeGalleryContents(targetDoc, isInitialPage = false) {
+    let jsonData = [];
+    let currentBatchIndex = 0;
+    const batchSize = 25;
+
+    async function observeGalleryContents(targetDoc, isInitialPage = false, content) {
         return new Promise((resolve) => {
             const observer = new MutationObserver(() => {
-                const div_gallerycontents = targetDoc.querySelectorAll('div.gallery-content div');
+                if (content) {
+                    console.log(content);
+                    var div_gallerycontents = content;
+                } else {
+                    var div_gallerycontents = targetDoc.querySelectorAll('div.gallery-content div');
+                }
+
                 const div_page_containers = $('div.page-container');
                 const div_header_sort_select = $('div.header-sort-select');
 
@@ -212,7 +225,7 @@
         });
     }
 
-    function generateCard(contentUrl, title, imgPicture, Tags, seriesList, language, type, ArtistList) {
+    function generateCard(contentUrl, title, imgPicture, Tags, seriesList, language, type, ArtistList, stars = 0) {
         const div_col = $('<div class="col"></div>');
         $('.row').append(div_col);
         const div_card = $('<div class="card h-100"></div>');
@@ -262,17 +275,42 @@
         appendListRow('artist', ArtistList, ' artist:', div_card_body);
         appendListRow('series', seriesList, ' series:', div_card_body);
 
-        const a_PageNum = $('<h6 class="badge bg-secondary">Loading...</h6>');
-        div_card_body.append(a_PageNum);
+        // Create container for page number and stars
+        const div_numstar_container = $('<div class="numstar-container"></div>');
+        div_card_body.append(div_numstar_container);
+
+        // Page number
+        const h6_pagenum = $('<h6 class="badge bg-secondary">Loading...</h6>');
+        div_numstar_container.append(h6_pagenum);
         const re_num = contentUrl.match(/.*-(\d+)\.html/);
         if (re_num && re_num[1]) {
             const galleryId = re_num[1];
             $.getScript(`https://ltn.gold-usergeneratedcontent.net/galleries/${galleryId}.js`, function() {
                 if (typeof galleryinfo !== 'undefined' && galleryinfo.files) {
-                    a_PageNum.text(`${galleryinfo.files.length}p`);
+                    h6_pagenum.text(`${galleryinfo.files.length}p`);
                 }
             }).fail(() => console.error('Failed to load gallery script:', galleryId));
         }
+
+        // Star rating
+        const h6_star = $('<h6 class="star"></h6>');
+        if (stars > 0 && stars <= 50) {
+            const filledStars = Math.floor(stars / 10); // Number of filled stars
+            const hasHalfStar = stars % 10 >= 5 ? 1 : 0; // Half star if remainder >= 5
+
+            // Add filled stars
+            for (let i = 0; i < filledStars; i++) {
+                const i_fillstar = $('<i class="bi bi-star-fill"></i>');
+                h6_star.append(i_fillstar);
+            }
+
+            // Add half star if applicable
+            if (hasHalfStar) {
+                const i_halfstar = $('<i class="bi bi-star-half"></i>');
+                h6_star.append(i_halfstar);
+            }
+        }
+        div_numstar_container.append(h6_star);
 
         const div_tags_container = $('<div class="tags-container"></div>');
         div_card_body.append(div_tags_container);
@@ -325,11 +363,12 @@
     async function initializePage(content) {
         let initialContents;
         if (content) {
-            initialContents = content;
+            initialContents = Array.from(content).filter(element =>
+                Array.from(element.classList).some(cls => validClasses.includes(cls))
+            );
         } else {
             initialContents = await observeGalleryContents(document, true);
         }
-
 
         document.documentElement.innerHTML = html;
         document.head.insertAdjacentHTML('beforeend', head);
@@ -341,7 +380,6 @@
         const newSelect = document.createElement('select');
         newSelect.id = 'custom_sort';
 
-        // 必要に応じて <select> にオプションを追加
         const option1 = document.createElement('option');
         option1.text = '-';
         option1.value = 'value1';
@@ -352,8 +390,6 @@
         option2.value = 'value2';
         newSelect.appendChild(option2);
 
-
-        // obj_data.div_header_sort_select[0] に新しい <select> を追加
         obj_data.div_header_sort_select[0].appendChild(newSelect);
         if (obj_data.div_header_sort_select) html_row.appendChild(obj_data.div_header_sort_select[0]);
 
@@ -428,13 +464,115 @@
         }
     }
 
+
+    function setupCustomSort() {
+        const newSelect = document.getElementById('custom_sort');
+        newSelect.addEventListener('change', (e) => {
+            if (e.target.value === 'value2') {
+                currentBatchIndex = 0;
+                jsonData = [];
+                $('.row').empty();
+
+                $.get('http://192.168.3.12:8080/test_final_result.json', function(data) {
+                    jsonData = data;
+                    processBatch();
+                }).fail(function() {
+                    console.error('Failed to fetch JSON from http://192.168.3.12:8080/test_final_result.json');
+                });
+            }
+        });
+    }
+
+    function processBatch() {
+        if (currentBatchIndex >= jsonData.length) {
+            console.log('No more data to process');
+            return;
+        }
+
+        const div_gallery_content = document.createElement('div');
+        div_gallery_content.className = 'gallery-content';
+        div_gallery_content.style.cssText = 'position: fixed; top: 0; left: 0; width: 1px; height: 1px; border: 0; visibility: hidden;';
+        document.body.appendChild(div_gallery_content);
+
+        const dataBatch = jsonData.slice(currentBatchIndex, currentBatchIndex + batchSize);
+        currentBatchIndex += batchSize;
+
+        const fetchPromises = dataBatch.map(item => {
+            const id = item.id;
+            const stars = item.stars || 0;
+            const url = `https://ltn.gold-usergeneratedcontent.net/galleryblock/${id}.html`;
+
+            return $.get(url).then(function(html) {
+                html = typeof rewrite_tn_paths === 'function' ? rewrite_tn_paths(html) : html;
+                const domElements = $.parseHTML(html);
+                const container = document.createElement('div');
+                container.append(...domElements);
+                div_gallery_content.appendChild(container);
+
+                if ('loading' in HTMLImageElement.prototype && typeof flip_lazy_images === 'function') {
+                    flip_lazy_images();
+                }
+                if (typeof moveimages === 'function') {
+                    moveimages();
+                }
+                if (typeof localDates === 'function') {
+                    localDates();
+                }
+                if (typeof limitLists === 'function') {
+                    limitLists();
+                }
+
+                return { container, stars };
+            }).fail(function() {
+                console.error(`Failed to fetch HTML from ${url}`);
+                return null;
+            });
+        });
+
+        Promise.all(fetchPromises).then(results => {
+            const validClasses = ['dj', 'cg', 'acg', 'manga', 'anime', 'imageset'];
+            results.forEach(result => {
+                if (!result) return;
+                const { container, stars } = result;
+                const galleryItems = Array.from(container.children).filter(element =>
+                    Array.from(element.classList).some(cls => validClasses.includes(cls))
+                );
+
+                galleryItems.forEach(item => {
+                    const h1Element = item.querySelector('h1.lillie a');
+                    generateCard(
+                        h1Element ? h1Element.href : '#',
+                        h1Element ? h1Element.textContent : 'Unknown',
+                        item.querySelector('div[class$="-img1"] picture'),
+                        item.querySelectorAll('td.relatedtags ul li a'),
+                        item.querySelectorAll('td.series-list ul li a'),
+                        item.querySelector('table.dj-desc tbody tr:nth-child(3) td a') || { textContent: 'Unknown', href: '#' },
+                        item.querySelector('table.dj-desc tbody tr:nth-child(2) td a') || { textContent: 'Unknown', href: '#' },
+                        item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' },
+                        stars
+                    );
+                });
+            });
+
+            document.body.removeChild(div_gallery_content);
+            setupPopupEvents();
+            setupTagScrollEvents();
+            hasFetched = false;
+        }).catch(error => {
+            console.error('Error processing batch:', error);
+            hasFetched = false;
+        });
+    }
+
     window.onscroll = function() {
         if (hasFetched) return;
-        if ((window.scrollY + window.innerHeight) >= document.documentElement.scrollHeight * 0.8) {
+        if ((window.scrollY + window.innerHeight) >= document.documentElement.scrollHeight * 0.9) {
             hasFetched = true;
-            const nextUrl = getNextPageUrl();
-            console.log('Fetching next page:', nextUrl);
-            loadNextPageInIframe(nextUrl);
+            if (jsonData.length > 0) {
+                processBatch();
+            } else {
+                loadNextPageInIframe(getNextPageUrl());
+            }
         }
     };
 
@@ -533,7 +671,6 @@
 
         const updateSuggestionsVisibility = () => {
             suggestionsContainer.classList.toggle('show', suggestionsContainer.children.length > 0 && input === document.activeElement);
-
         };
 
         let committedValue = '';
@@ -621,14 +758,6 @@
         new MutationObserver(updateDropdown).observe(hiddenSuggestions, { childList: true, subtree: true });
     }
 
-
-
-
-
-
-
-
-
     function setupTagPicker() {
         const pickerBtn = document.getElementById('tag-picker-btn');
         const addBtn = document.getElementById('add-tag-btn');
@@ -710,24 +839,16 @@
         }
 
         function extractTagFromHref(href) {
-            // window.location.href を基にした動的正規表現
             const escapedCurrentUrl = escapeRegExp(window.location.href + "%20");
             const dynamicPattern = new RegExp(`${escapedCurrentUrl}(.*)`);
             console.log(dynamicPattern);
             let match = href.match(dynamicPattern);
             console.log(match);
 
-            // マッチした場合のデバッグ出力
-            if (match && match[1]) {
-                console.log(decodeURI(match[1]));
-            }
-
-            // 動的パターンでマッチしない場合、静的フォールバックを使用
             if (!match) {
                 match = href.match(/\/tag\/(.*)-all.html/) || href.match(/search\.html\?[^ ]* (.*)$/);
             }
 
-            // マッチした場合はキャプチャグループを返す
             if (match && match[1]) {
                 return encode_search_query_for_url(decodeURIComponent(match[1]));
             }
@@ -756,103 +877,10 @@
         }
     }
 
-
-
-    function setupCustomSort() {
-        const newSelect = document.getElementById('custom_sort');
-        newSelect.addEventListener('change', (e) => {
-            if (e.target.value === 'value2') {
-                // Create hidden container for gallery content
-                const div_gallery_content = document.createElement('div');
-                div_gallery_content.className = 'gallery-content';
-                div_gallery_content.style.cssText = 'position: fixed; top: 0; left: 0; width: 1px; height: 1px; border: 0; visibility: hidden;';
-                document.body.appendChild(div_gallery_content);
-
-                // Clear existing gallery cards
-                $('.row').empty();
-
-                $.get('http://192.168.3.12:8080/test_final_result.json', function(data) {
-                    // Create array of fetch promises for gallery HTML
-                    const fetchPromises = data.slice(0, 25).map(function(item) {
-                        const id = item.id;
-                        const url = `https://ltn.gold-usergeneratedcontent.net/galleryblock/${id}.html`;
-
-                        return $.get(url).then(function(html) {
-                            // Rewrite paths and parse HTML
-                            html = rewrite_tn_paths(html); // Assumes rewrite_tn_paths is defined
-                            const domElements = $.parseHTML(html);
-                            div_gallery_content.append(...domElements); // Append parsed nodes
-
-                            // Execute additional functions (if defined)
-                            if ('loading' in HTMLImageElement.prototype && typeof flip_lazy_images === 'function') {
-                                flip_lazy_images();
-                            }
-                            if (typeof moveimages === 'function') {
-                                moveimages();
-                            }
-                            if (typeof localDates === 'function') {
-                                localDates();
-                            }
-                            if (typeof limitLists === 'function') {
-                                limitLists();
-                            }
-                        }).fail(function() {
-                            console.error(`Failed to fetch HTML from ${url}`);
-                        });
-                    });
-
-                    // Wait for all fetches to complete, then process nodes
-                    Promise.all(fetchPromises).then(() => {
-                        const validClasses = ['dj', 'cg', 'acg', 'manga', 'anime', 'imageset'];
-                        const galleryItems = Array.from(div_gallery_content.children).filter(element =>
-                            Array.from(element.classList).some(cls => validClasses.includes(cls))
-                        );
-
-                        // Generate cards for each valid node
-                        galleryItems.forEach(item => {
-                            const h1Element = item.querySelector('h1.lillie a');
-                            generateCard(
-                                h1Element ? h1Element.href : '#',
-                                h1Element ? h1Element.textContent : 'Unknown',
-                                item.querySelector('div[class$="-img1"] picture'),
-                                item.querySelectorAll('td.relatedtags ul li a'),
-                                item.querySelectorAll('td.series-list ul li a'),
-                                item.querySelector('table.dj-desc tbody tr:nth-child(3) td a') || { textContent: 'Unknown', href: '#' },
-                                item.querySelector('table.dj-desc tbody tr:nth-child(2) td a') || { textContent: 'Unknown', href: '#' },
-                                item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' }
-                            );
-                        });
-
-                        // Clean up hidden container
-                        document.body.removeChild(div_gallery_content);
-
-                        // Re-attach event listeners
-                        setupPopupEvents();
-                        setupTagScrollEvents();
-                    }).catch(error => {
-                        console.error('Error processing gallery items:', error);
-                    });
-                }).fail(function() {
-                    console.error('Failed to fetch JSON from http://192.168.3.12:8080/test_final_result.json');
-                });
-            }
-        });
-    }
-
-
-
-
-
-
-
     await initializePage();
     setupSearch();
     setupDefaultQueryEditor();
     loadNextPageInIframe(getNextPageUrl());
-    setupPopupEvents()
-    if ((window.scrollY + window.innerHeight) >= document.documentElement.scrollHeight * 0.9) {
-        hasFetched = true;
-        loadNextPageInIframe(getNextPageUrl());
-    }
-    setupCustomSort()
+    setupPopupEvents();
+    setupCustomSort();
 })();

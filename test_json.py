@@ -37,7 +37,16 @@ for id, item in data.items():
 # Sort the list by the product of stars and num_stars in descending order
 new_data = sorted(new_data, key=lambda x: x["stars"] * x["num_stars"], reverse=True)
 
-# Save the modified and sorted JSON to a new file
+# Remove duplicates based on dmm_title, keeping the first occurrence
+seen_titles = set()
+deduplicated_data = []
+for item in new_data:
+    dmm_title = item["dmm_title"]
+    if dmm_title not in seen_titles:
+        seen_titles.add(dmm_title)
+        deduplicated_data.append(item)
+
+# Save the modified, sorted, and deduplicated JSON to a new file
 output_path = "./test_final_result.json"
 with open(output_path, "w", encoding="utf-8") as f:
-    json.dump(new_data, f, ensure_ascii=False, indent=4)
+    json.dump(deduplicated_data, f, ensure_ascii=False, indent=4)
