@@ -313,7 +313,6 @@
 
     function setupPopupEvents() {
         document.body.addEventListener('click', (e) => {
-            console.log("a")
             const popup = e.target.closest('.popup');
             if (popup) {
                 e.preventDefault();
@@ -323,8 +322,14 @@
         });
     }
 
-    async function initializePage() {
-        const initialContents = await observeGalleryContents(document, true);
+    async function initializePage(content) {
+        let initialContents;
+        if (content) {
+            initialContents = content;
+        } else {
+            initialContents = await observeGalleryContents(document, true);
+        }
+
 
         document.documentElement.innerHTML = html;
         document.head.insertAdjacentHTML('beforeend', head);
@@ -333,6 +338,23 @@
         const html_container = document.querySelector('.container');
         const html_row = document.querySelector('.row');
         if (obj_data.div_NextPage) html_container.appendChild(obj_data.div_NextPage[1]);
+        const newSelect = document.createElement('select');
+        newSelect.id = 'custom_sort';
+
+        // 必要に応じて <select> にオプションを追加
+        const option1 = document.createElement('option');
+        option1.text = '-';
+        option1.value = 'value1';
+        newSelect.appendChild(option1);
+
+        const option2 = document.createElement('option');
+        option2.text = 'star sort';
+        option2.value = 'value2';
+        newSelect.appendChild(option2);
+
+
+        // obj_data.div_header_sort_select[0] に新しい <select> を追加
+        obj_data.div_header_sort_select[0].appendChild(newSelect);
         if (obj_data.div_header_sort_select) html_row.appendChild(obj_data.div_header_sort_select[0]);
 
         initialContents.forEach(item => {
@@ -489,6 +511,17 @@
         const input = document.getElementById('query-input');
         const form = document.querySelector('form[role="search"]');
 
+        const stickyNavbar = document.querySelector('.sticky-navbar');
+        input.addEventListener("focus", function() {
+            stickyNavbar.classList.add('sticky-navbar--static');
+            stickyNavbar.classList.remove('sticky-navbar');
+        });
+
+        input.addEventListener("blur", function() {
+            stickyNavbar.classList.remove('sticky-navbar--static');
+            stickyNavbar.classList.add('sticky-navbar');
+        });
+
         const hiddenSuggestions = document.createElement('ul');
         hiddenSuggestions.id = 'search-suggestions';
         hiddenSuggestions.style.display = 'none';
@@ -500,8 +533,7 @@
 
         const updateSuggestionsVisibility = () => {
             suggestionsContainer.classList.toggle('show', suggestionsContainer.children.length > 0 && input === document.activeElement);
-            const stickyNavbar = document.querySelector('.sticky-navbar');
-            stickyNavbar.classList.toggle('sticky-navbar--static');
+
         };
 
         let committedValue = '';
@@ -726,6 +758,86 @@
 
 
 
+    function setupCustomSort() {
+        const newSelect = document.getElementById('custom_sort');
+        newSelect.addEventListener('change', (e) => {
+            if (e.target.value === 'value2') {
+                // Create hidden container for gallery content
+                const div_gallery_content = document.createElement('div');
+                div_gallery_content.className = 'gallery-content';
+                div_gallery_content.style.cssText = 'position: fixed; top: 0; left: 0; width: 1px; height: 1px; border: 0; visibility: hidden;';
+                document.body.appendChild(div_gallery_content);
+
+                // Clear existing gallery cards
+                $('.row').empty();
+
+                $.get('http://192.168.3.12:8080/test_final_result.json', function(data) {
+                    // Create array of fetch promises for gallery HTML
+                    const fetchPromises = data.slice(0, 25).map(function(item) {
+                        const id = item.id;
+                        const url = `https://ltn.gold-usergeneratedcontent.net/galleryblock/${id}.html`;
+
+                        return $.get(url).then(function(html) {
+                            // Rewrite paths and parse HTML
+                            html = rewrite_tn_paths(html); // Assumes rewrite_tn_paths is defined
+                            const domElements = $.parseHTML(html);
+                            div_gallery_content.append(...domElements); // Append parsed nodes
+
+                            // Execute additional functions (if defined)
+                            if ('loading' in HTMLImageElement.prototype && typeof flip_lazy_images === 'function') {
+                                flip_lazy_images();
+                            }
+                            if (typeof moveimages === 'function') {
+                                moveimages();
+                            }
+                            if (typeof localDates === 'function') {
+                                localDates();
+                            }
+                            if (typeof limitLists === 'function') {
+                                limitLists();
+                            }
+                        }).fail(function() {
+                            console.error(`Failed to fetch HTML from ${url}`);
+                        });
+                    });
+
+                    // Wait for all fetches to complete, then process nodes
+                    Promise.all(fetchPromises).then(() => {
+                        const validClasses = ['dj', 'cg', 'acg', 'manga', 'anime', 'imageset'];
+                        const galleryItems = Array.from(div_gallery_content.children).filter(element =>
+                            Array.from(element.classList).some(cls => validClasses.includes(cls))
+                        );
+
+                        // Generate cards for each valid node
+                        galleryItems.forEach(item => {
+                            const h1Element = item.querySelector('h1.lillie a');
+                            generateCard(
+                                h1Element ? h1Element.href : '#',
+                                h1Element ? h1Element.textContent : 'Unknown',
+                                item.querySelector('div[class$="-img1"] picture'),
+                                item.querySelectorAll('td.relatedtags ul li a'),
+                                item.querySelectorAll('td.series-list ul li a'),
+                                item.querySelector('table.dj-desc tbody tr:nth-child(3) td a') || { textContent: 'Unknown', href: '#' },
+                                item.querySelector('table.dj-desc tbody tr:nth-child(2) td a') || { textContent: 'Unknown', href: '#' },
+                                item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' }
+                            );
+                        });
+
+                        // Clean up hidden container
+                        document.body.removeChild(div_gallery_content);
+
+                        // Re-attach event listeners
+                        setupPopupEvents();
+                        setupTagScrollEvents();
+                    }).catch(error => {
+                        console.error('Error processing gallery items:', error);
+                    });
+                }).fail(function() {
+                    console.error('Failed to fetch JSON from http://192.168.3.12:8080/test_final_result.json');
+                });
+            }
+        });
+    }
 
 
 
@@ -742,4 +854,5 @@
         hasFetched = true;
         loadNextPageInIframe(getNextPageUrl());
     }
+    setupCustomSort()
 })();
