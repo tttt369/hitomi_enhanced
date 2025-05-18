@@ -317,8 +317,6 @@
         let galleryId
         if (re_num && re_num[1]) {
             galleryId = re_num[1];
-            // if (jsonDataMap[galleryId]) {
-            //     h6_pagenum.text(`${jsonDataMap[galleryId].pages}p`);
             const item = Object.values(jsonDataMap).find(item => item.id === galleryId);
             if (item) {
                 h6_pagenum.text(`${item.pages}p`);
@@ -337,7 +335,6 @@
         }
 
         const h6_star = $('<h6 class="star"></h6>');
-        // const finalStars = jsonDataMap[galleryId] ? (jsonDataMap[galleryId].stars || 0) : stars;
         const json_items = Object.values(jsonDataMap).find(item => item.id === galleryId);
         if (json_items) {
             const a_StarHref = $("<a></a>")
