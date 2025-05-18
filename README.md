@@ -17,6 +17,7 @@ This script works on any device that supports a userscript manager.
 
 > **Note**  
 > This script does not include ad-blocking functionality, so we recommend using an ad blocker alongside it.
+> Mostly vibe code and I'm a noob.
 
 ### PC
 
