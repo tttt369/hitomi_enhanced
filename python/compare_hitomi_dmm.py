@@ -142,12 +142,6 @@ async def make_dmm_json(found_urls) -> Dict[str, Any]:
     await write_json(DMM_JSON_PATH, dmm_dict)
     return dmm_dict
 
-
-
-
-
-
-
 async def scrape_dmm(client, hitomi_dict, dmm_dict, url, hitomi_key):
     result_dict = {}
 
@@ -163,12 +157,11 @@ async def scrape_dmm(client, hitomi_dict, dmm_dict, url, hitomi_key):
                 raise
 
     tree = html.fromstring(text)
-    title = tree.xpath('//title/text()')[0]  # 最初のtitle要素のテキストを取得
+    title = tree.xpath('//title/text()')[0]
 
     match = re.match(r'([^()]+)\(([^()]+)\)(.*)', title)
     artist_name = match.group(2) if match else ""
 
-    # "u-common__ico--review" を含む要素をXPathで取得
     star_element = tree.xpath("//*[contains(@class, 'u-common__ico--review')]")
     stars = None
     if star_element:
@@ -177,7 +170,6 @@ async def scrape_dmm(client, hitomi_dict, dmm_dict, url, hitomi_key):
         if raw_stars:
             stars = raw_stars.group(1)
 
-    # "userReview__txt" クラスを持つ<span>要素をXPathで取得
     num_stars = None
     num_stars_element = tree.xpath('//span[@class="userReview__txt"]')
     if num_stars_element:
@@ -199,21 +191,6 @@ async def scrape_dmm(client, hitomi_dict, dmm_dict, url, hitomi_key):
 
     print(hitomi_dict[hitomi_key])
     return result_dict
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 async def get_sitemap_content(session, url, dir=None) -> bytes:
     filename = os.path.basename(url)
@@ -286,7 +263,6 @@ async def main():
             title = title.replace(" ", "")
             hitomi_title_map.setdefault(title, []).append(hitomi_key)
 
-    # dict_result = {}
     matched_dmm_urls = []
     for dmm_key, dmm_value in dmm_dict.items():
         dmm_title = dmm_value.get("title")
