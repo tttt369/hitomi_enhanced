@@ -24,6 +24,8 @@ for id, item in data.items():
         item["pages"] = int(item["pages"])
     elif item["pages"] is None:
         item["pages"] = 0
+    if item["stars"] == 0 and item["num_stars"] == 1:
+        item["num_stars"] = 0  # This is redundant but included per your snippet
 
 # Create a list to store restructured entries
 new_data = []

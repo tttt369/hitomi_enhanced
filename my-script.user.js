@@ -27,6 +27,82 @@
         return;
     }
 
+    // Initialize IndexedDB
+    function initIndexedDB() {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open('HitomiEnhancedDB', 1);
+
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
+                db.createObjectStore('jsonCache');
+            };
+
+            request.onsuccess = (event) => {
+                resolve(event.target.result);
+            };
+
+            request.onerror = (event) => {
+                reject(new Error('IndexedDB initialization failed: ' + event.target.error));
+            };
+        });
+    }
+
+    // Store JSON data in IndexedDB
+    function storeJsonInIndexedDB(db, jsonData) {
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction(['jsonCache'], 'readwrite');
+            const store = transaction.objectStore('jsonCache');
+            const request = store.put(jsonData, 'test_final_result');
+
+            request.onsuccess = () => resolve(console.log("cached Json"));
+            request.onerror = () => reject(new Error('Failed to store JSON in IndexedDB: ' + request.error));
+        });
+    }
+
+    // Retrieve JSON data from IndexedDB
+    function getJsonFromIndexedDB(db) {
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction(['jsonCache'], 'readonly');
+            const store = transaction.objectStore('jsonCache');
+            const request = store.get('test_final_result');
+
+            request.onsuccess = () => resolve(request.result || null);
+            request.onerror = () => reject(new Error('Failed to retrieve JSON from IndexedDB: ' + request.error));
+        });
+    }
+
+    // Fetch JSON data and cache it if not in IndexedDB
+    async function getCachedJson() {
+        try {
+            const db = await initIndexedDB();
+            let jsonData = await getJsonFromIndexedDB(db);
+
+            if (!jsonData) {
+                jsonData = await new Promise((resolve, reject) => {
+                    $.get('http://192.168.3.12:8080/test_final_result.json', (data) => {
+                        resolve(data);
+                    }).fail(() => {
+                        reject(new Error('Failed to fetch JSON from http://192.168.3.12:8080/test_final_result.json'));
+                    });
+                });
+                await storeJsonInIndexedDB(db, jsonData);
+            }
+
+            const jsonDataMap = {}
+            jsonData.forEach((item, index) => {
+                jsonDataMap[index] = item;
+            });
+
+            return jsonDataMap;
+        } catch (error) {
+            console.error(error);
+            return {};
+        }
+    }
+
+    // Load JSON data
+    const jsonDataMap = await getCachedJson();
+
     const html = `
         <!DOCTYPE html>
         <html data-bs-theme="dark" lang="ja">
@@ -125,45 +201,19 @@
             .tag-picker-btn { margin-right: auto; }
             .highlighted-tag { border: 2px solid yellow !important; }
             .sticky-navbar button { font-size: 14px; }
-            .numstar-container { display: flex; gap: 10px; align-items: center; margin-top: 5px; }
-            .star { margin: 0; display: flex; gap: 3px; color: #ffc107; }
+            .numstar-container { display: flex; width: 100%; justify-content: space-between; gap: 10px; align-items: center; margin-top: auto; }
+            .star { display: flex; margin: 0; gap: 3px; color: #ffc107; font-size: x-small; align-items: flex-end; }
             .star i { font-size: 14px; }
-
-            /* ナビゲーションと検索エリアの調整 */
-            .navbar-collapse { 
-                display: flex; 
-                flex-wrap: wrap; 
-                justify-content: space-between; 
-                align-items: center; 
-            }
-            .navbar-nav.me-auto { 
-                flex-grow: 1; 
-                margin-right: 10px; /* デフォルトのマージンを制限 */
-            }
-            .SearchContainer { 
-                flex-shrink: 1; 
-                min-width: 0; /* 必要に応じて縮小を許可 */
-            }
-            .sticky-navbar--static {
-                position: static;
-            }
-            @media (max-width: 991px) { /* Bootstrapのlgブレークポイント */
-                .navbar-nav.me-auto { 
-                    margin-right: 0; /* 小さい画面でマージンを削除 */
-                    flex-basis: 100%; /* ナビゲーションを全幅に */
-                    margin-bottom: 10px; 
-                }
-                .SearchContainer { 
-                    flex-basis: 100%; /* 検索エリアも全幅に */
-                    max-width: 100%; 
-                }
-                .default-query-container { 
-                    flex-direction: column; /* 縦に配置 */
-                    align-items: stretch; 
-                }
-                .default-query-input { 
-                    width: 100%; /* 入力欄を全幅に */
-                }
+            .navbar-collapse { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; }
+            .navbar-nav.me-auto { flex-grow: 1; margin-right: 10px; }
+            .SearchContainer { flex-shrink: 1; min-width: 0; }
+            .sticky-navbar--static { display: flex; position: static; top: 0; background-color: #343a40; }
+            .sticky-navbar--static button { font-size: 14px; }
+            @media (max-width: 991px) {
+                .navbar-nav.me-auto { margin-right: 0; flex-basis: 100%; margin-bottom: 10px; }
+                .SearchContainer { flex-basis: 100%; max-width: 100%; }
+                .default-query-container { flex-direction: column; align-items: stretch; }
+                .default-query-input { width: 100%; }
             }
             @media (max-width: 480px) {
                 .ImageContainer img { height: 170px; }
@@ -172,17 +222,9 @@
             @media (min-width: 481px) and (max-width: 992px) {
                 .ImageContainer img { height: 220px; }
             }
-            @media (min-width: 768px) { 
-                .col { width: 30%; } 
-            }
-            @media (min-width: 992px) and (max-width: 1199px) { 
-                .col { width: 25%; }  
-            }
-            @media (min-width: 992px) {
-                .SearchContainer { 
-                    max-width: 490px; 
-                }
-            }
+            @media (min-width: 768px) { .col { width: 30%; } }
+            @media (min-width: 992px) and (max-width: 1199px) { .col { width: 25%; } }
+            @media (min-width: 992px) { .SearchContainer { max-width: 490px; } }
         </style>
     `;
 
@@ -195,16 +237,10 @@
     let currentBatchIndex = 0;
     const batchSize = 25;
 
-    async function observeGalleryContents(targetDoc, isInitialPage = false, content) {
+    async function observeGalleryContents(targetDoc, isInitialPage = false) {
         return new Promise((resolve) => {
             const observer = new MutationObserver(() => {
-                if (content) {
-                    console.log(content);
-                    var div_gallerycontents = content;
-                } else {
-                    var div_gallerycontents = targetDoc.querySelectorAll('div.gallery-content div');
-                }
-
+                const div_gallerycontents = targetDoc.querySelectorAll('div.gallery-content div');
                 const div_page_containers = $('div.page-container');
                 const div_header_sort_select = $('div.header-sort-select');
 
@@ -212,12 +248,9 @@
                 if (div_header_sort_select.length > 0) obj_data.div_header_sort_select = div_header_sort_select;
                 if (div_gallerycontents.length > 2) {
                     observer.disconnect();
-                    const filteredContents = [];
-                    div_gallerycontents.forEach(element => {
-                        if (Array.from(element.classList).some(cls => validClasses.includes(cls))) {
-                            filteredContents.push(isInitialPage ? $(element).get()[0] : element.cloneNode(true));
-                        }
-                    });
+                    const filteredContents = Array.from(div_gallerycontents).filter(element =>
+                        Array.from(element.classList).some(cls => validClasses.includes(cls))
+                    ).map(element => isInitialPage ? $(element).get()[0] : element.cloneNode(true));
                     resolve(filteredContents);
                 }
             });
@@ -225,7 +258,7 @@
         });
     }
 
-    function generateCard(contentUrl, title, imgPicture, Tags, seriesList, language, type, ArtistList, stars = 0) {
+    async function generateCard(contentUrl, title, imgPicture, Tags, seriesList, language, type, ArtistList, stars = 0, jsonDataMap) {
         const div_col = $('<div class="col"></div>');
         $('.row').append(div_col);
         const div_card = $('<div class="card h-100"></div>');
@@ -275,42 +308,61 @@
         appendListRow('artist', ArtistList, ' artist:', div_card_body);
         appendListRow('series', seriesList, ' series:', div_card_body);
 
-        // Create container for page number and stars
         const div_numstar_container = $('<div class="numstar-container"></div>');
         div_card_body.append(div_numstar_container);
 
-        // Page number
         const h6_pagenum = $('<h6 class="badge bg-secondary">Loading...</h6>');
         div_numstar_container.append(h6_pagenum);
         const re_num = contentUrl.match(/.*-(\d+)\.html/);
+        let galleryId
         if (re_num && re_num[1]) {
-            const galleryId = re_num[1];
-            $.getScript(`https://ltn.gold-usergeneratedcontent.net/galleries/${galleryId}.js`, function() {
-                if (typeof galleryinfo !== 'undefined' && galleryinfo.files) {
-                    h6_pagenum.text(`${galleryinfo.files.length}p`);
-                }
-            }).fail(() => console.error('Failed to load gallery script:', galleryId));
+            galleryId = re_num[1];
+            // if (jsonDataMap[galleryId]) {
+            //     h6_pagenum.text(`${jsonDataMap[galleryId].pages}p`);
+            const item = Object.values(jsonDataMap).find(item => item.id === galleryId);
+            if (item) {
+                h6_pagenum.text(`${item.pages}p`);
+            } else {
+                $.getScript(`https://ltn.gold-usergeneratedcontent.net/galleries/${galleryId}.js`, function() {
+                    if (typeof galleryinfo !== 'undefined' && galleryinfo.files) {
+                        h6_pagenum.text(`${galleryinfo.files.length}p`);
+                    }
+                }).fail(() => {
+                    console.error('Failed to load gallery script:', galleryId);
+                    h6_pagenum.text('N/A');
+                });
+            }
+        } else {
+            h6_pagenum.text('N/A');
         }
 
-        // Star rating
         const h6_star = $('<h6 class="star"></h6>');
-        if (stars > 0 && stars <= 50) {
-            const filledStars = Math.floor(stars / 10); // Number of filled stars
-            const hasHalfStar = stars % 10 >= 5 ? 1 : 0; // Half star if remainder >= 5
+        // const finalStars = jsonDataMap[galleryId] ? (jsonDataMap[galleryId].stars || 0) : stars;
+        const json_items = Object.values(jsonDataMap).find(item => item.id === galleryId);
+        if (json_items) {
+            const a_StarHref = $("<a></a>")
+            a_StarHref.attr("href", json_items.dmm_url);
+            const finalStars = json_items.stars
+            const filledStars = Math.floor(finalStars / 10);
+            const NumStars = json_items.num_stars
+            const hasHalfStar = finalStars % 10 >= 5 ? 1 : 0;
 
-            // Add filled stars
-            for (let i = 0; i < filledStars; i++) {
-                const i_fillstar = $('<i class="bi bi-star-fill"></i>');
-                h6_star.append(i_fillstar);
-            }
+            if (finalStars > 0) {
 
-            // Add half star if applicable
-            if (hasHalfStar) {
-                const i_halfstar = $('<i class="bi bi-star-half"></i>');
-                h6_star.append(i_halfstar);
+                for (let i = 0; i < filledStars; i++) {
+                    const i_fillstar = $('<i class="bi bi-star-fill"></i>');
+                    h6_star.append(i_fillstar);
+                }
+
+                if (hasHalfStar) {
+                    const i_halfstar = $('<i class="bi bi-star-half"></i>');
+                    h6_star.append(i_halfstar);
+                }
+                h6_star.append(NumStars);
+                a_StarHref.append(h6_star)
             }
+            div_numstar_container.append(a_StarHref)
         }
-        div_numstar_container.append(h6_star);
 
         const div_tags_container = $('<div class="tags-container"></div>');
         div_card_body.append(div_tags_container);
@@ -360,15 +412,8 @@
         });
     }
 
-    async function initializePage(content) {
-        let initialContents;
-        if (content) {
-            initialContents = Array.from(content).filter(element =>
-                Array.from(element.classList).some(cls => validClasses.includes(cls))
-            );
-        } else {
-            initialContents = await observeGalleryContents(document, true);
-        }
+    async function initializePage(jsonDataMap) {
+        let initialContents = await observeGalleryContents(document, true);
 
         document.documentElement.innerHTML = html;
         document.head.insertAdjacentHTML('beforeend', head);
@@ -403,7 +448,9 @@
                 item.querySelectorAll('td.series-list ul li a'),
                 item.querySelector('table.dj-desc tbody tr:nth-child(3) td a') || { textContent: 'Unknown', href: '#' },
                 item.querySelector('table.dj-desc tbody tr:nth-child(2) td a') || { textContent: 'Unknown', href: '#' },
-                item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' }
+                item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' },
+                0,
+                jsonDataMap
             );
         });
 
@@ -412,7 +459,7 @@
         setupTagPicker();
     }
 
-    function loadNextPageInIframe(url) {
+    function loadNextPageInIframe(url, jsonDataMap) {
         const iframe = document.createElement('iframe');
         iframe.style.cssText = 'position: fixed; top: 0; left: 0; width: 1px; height: 1px; border: 0; visibility: hidden;';
         iframe.sandbox = 'allow-same-origin allow-scripts';
@@ -432,7 +479,9 @@
                         item.querySelectorAll('td.series-list ul li a'),
                         item.querySelector('table.dj-desc tbody tr:nth-child(3) td a') || { textContent: 'Unknown', href: '#' },
                         item.querySelector('table.dj-desc tbody tr:nth-child(2) td a') || { textContent: 'Unknown', href: '#' },
-                        item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' }
+                        item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' },
+                        0,
+                        jsonDataMap
                     );
                 });
                 console.log(`Page ${currentPage} loaded`);
@@ -464,8 +513,7 @@
         }
     }
 
-
-    function setupCustomSort() {
+    async function setupCustomSort(jsonDataMap) {
         const newSelect = document.getElementById('custom_sort');
         newSelect.addEventListener('change', (e) => {
             if (e.target.value === 'value2') {
@@ -473,17 +521,13 @@
                 jsonData = [];
                 $('.row').empty();
 
-                $.get('http://192.168.3.12:8080/test_final_result.json', function(data) {
-                    jsonData = data;
-                    processBatch();
-                }).fail(function() {
-                    console.error('Failed to fetch JSON from http://192.168.3.12:8080/test_final_result.json');
-                });
+                jsonData = Object.values(jsonDataMap).sort((a, b) => (b.stars || 0) - (a.stars || 0));
+                processBatch(jsonDataMap);
             }
         });
     }
 
-    function processBatch() {
+    async function processBatch(jsonDataMap) {
         if (currentBatchIndex >= jsonData.length) {
             console.log('No more data to process');
             return;
@@ -529,7 +573,7 @@
             });
         });
 
-        Promise.all(fetchPromises).then(results => {
+        await Promise.all(fetchPromises).then(results => {
             const validClasses = ['dj', 'cg', 'acg', 'manga', 'anime', 'imageset'];
             results.forEach(result => {
                 if (!result) return;
@@ -549,7 +593,8 @@
                         item.querySelector('table.dj-desc tbody tr:nth-child(3) td a') || { textContent: 'Unknown', href: '#' },
                         item.querySelector('table.dj-desc tbody tr:nth-child(2) td a') || { textContent: 'Unknown', href: '#' },
                         item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' },
-                        stars
+                        stars,
+                        jsonDataMap
                     );
                 });
             });
@@ -569,9 +614,9 @@
         if ((window.scrollY + window.innerHeight) >= document.documentElement.scrollHeight * 0.9) {
             hasFetched = true;
             if (jsonData.length > 0) {
-                processBatch();
+                processBatch(jsonDataMap);
             } else {
-                loadNextPageInIframe(getNextPageUrl());
+                loadNextPageInIframe(getNextPageUrl(), jsonDataMap);
             }
         }
     };
@@ -612,12 +657,14 @@
             document.querySelector('.navbar-brand').href = newDefaultUrl;
             default_url = newDefaultUrl;
         }
+
         function savequery() {
             localStorage.setItem('hitomiDefaultQuery', defaultQuery);
             console.log('Default query saved:', defaultQuery);
             saveButton.textContent = 'Saved!';
             setTimeout(() => saveButton.textContent = 'Save', 1000);
         }
+
         function addquery() {
             defaultQuery += ` ${defaultQueryInput.value.trim()}`;
             defaultQueryInput.value = '';
@@ -648,8 +695,8 @@
     function setupSearch() {
         const input = document.getElementById('query-input');
         const form = document.querySelector('form[role="search"]');
-
         const stickyNavbar = document.querySelector('.sticky-navbar');
+
         input.addEventListener("focus", function() {
             stickyNavbar.classList.add('sticky-navbar--static');
             stickyNavbar.classList.remove('sticky-navbar');
@@ -764,95 +811,15 @@
         const excludeBtn = document.getElementById('exclude-tag-btn');
         let isPickerActive = false;
         let selectedTag = null;
-        updatePickerButton(pickerBtn, isPickerActive);
-
-        pickerBtn.addEventListener('click', () => {
-            isPickerActive = !isPickerActive;
-            pickerBtn.classList.toggle('btn-warning', isPickerActive);
-            updatePickerButton(pickerBtn, isPickerActive);
-            addBtn.disabled = !isPickerActive;
-            excludeBtn.disabled = !isPickerActive;
-
-            if (!isPickerActive && selectedTag) {
-                selectedTag.classList.remove('highlighted-tag');
-                selectedTag = null;
-            }
-        });
 
         function updatePickerButton(btn, active) {
-            btn.innerHTML = 'Select Tag';
-            const icon = document.createElement('i');
-            icon.className = 'bi bi-eyedropper';
-            icon.style.marginLeft = '5px';
-            if (!active) {
-                btn.innerHTML = '';
-            }
-            btn.appendChild(icon);
-        }
-
-        document.addEventListener('click', (e) => {
-            const tag = e.target.closest('.tags-container .badge');
-            if (isPickerActive && tag) {
-                e.preventDefault();
-                if (selectedTag) selectedTag.classList.remove('highlighted-tag');
-                tag.classList.add('highlighted-tag');
-                selectedTag = tag;
-            }
-        });
-
-        addBtn.addEventListener('click', () => {
-            if (selectedTag) {
-                console.log(selectedTag.href);
-                const tagText = extractTagFromHref(selectedTag.href);
-                console.log(tagText);
-                if (tagText && !defaultQuery.includes(tagText)) {
-                    defaultQuery += defaultQuery ? ` ${tagText}` : tagText;
-                    localStorage.setItem('hitomiDefaultQuery', defaultQuery);
-                    console.log(defaultQuery);
-                    updateDefaultQueryUI();
-                }
-                selectedTag.classList.remove('highlighted-tag');
-                selectedTag = null;
-            }
-        });
-
-        excludeBtn.addEventListener('click', () => {
-            if (selectedTag) {
-                console.log(selectedTag);
-                const tagText = extractTagFromHref(selectedTag.href);
-                if (tagText) {
-                    const excludeText = `-${tagText}`;
-                    if (!defaultQuery.includes(excludeText)) {
-                        defaultQuery += defaultQuery ? ` ${excludeText}` : excludeText;
-                        localStorage.setItem('hitomiDefaultQuery', defaultQuery);
-                        console.log(defaultQuery);
-                        updateDefaultQueryUI();
-                    }
-                }
-                selectedTag.classList.remove('highlighted-tag');
-                selectedTag = null;
-            }
-        });
-
-        function escapeRegExp(string) {
-            return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            btn.innerHTML = active ? '<i class="bi bi-eyedropper" style="margin-left: 5px;"></i> Select Tag' : '';
+            btn.classList.toggle('btn-warning', active);
         }
 
         function extractTagFromHref(href) {
-            const escapedCurrentUrl = escapeRegExp(window.location.href + "%20");
-            const dynamicPattern = new RegExp(`${escapedCurrentUrl}(.*)`);
-            console.log(dynamicPattern);
-            let match = href.match(dynamicPattern);
-            console.log(match);
-
-            if (!match) {
-                match = href.match(/\/tag\/(.*)-all.html/) || href.match(/search\.html\?[^ ]* (.*)$/);
-            }
-
-            if (match && match[1]) {
-                return encode_search_query_for_url(decodeURIComponent(match[1]));
-            }
-            return null;
+            const match = href.match(/\/tag\/(.*)-all.html/) || href.match(/search\.html\?.*? (.*)$/);
+            return match ? encode_search_query_for_url(decodeURIComponent(match[1])) : null;
         }
 
         function updateDefaultQueryUI() {
@@ -864,23 +831,74 @@
                 badge.className = 'badge bg-success d-flex align-items-center';
                 badge.innerHTML = `${part} <button type="button" class="btn-close btn-close-white ms-1" aria-label="Remove"></button>`;
                 badgesContainer.appendChild(badge);
-
                 badge.querySelector('.btn-close').addEventListener('click', () => {
                     defaultQuery = defaultQuery.split(' ').filter(p => p !== part).join(' ');
                     updateDefaultQueryUI();
                     default_url = `https://hitomi.la/search.html?${encodeURI(defaultQuery)}`;
                     document.querySelector('.navbar-brand').href = default_url;
+                    localStorage.setItem('hitomiDefaultQuery', defaultQuery);
                 });
             });
             default_url = `https://hitomi.la/search.html?${encodeURI(defaultQuery)}`;
             document.querySelector('.navbar-brand').href = default_url;
         }
+
+        pickerBtn.addEventListener('click', () => {
+            isPickerActive = !isPickerActive;
+            updatePickerButton(pickerBtn, isPickerActive);
+            addBtn.disabled = !isPickerActive;
+            excludeBtn.disabled = !isPickerActive;
+            if (!isPickerActive && selectedTag) {
+                selectedTag.classList.remove('highlighted-tag');
+                selectedTag = null;
+            }
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!isPickerActive) return;
+            const tag = e.target.closest('.tags-container .badge');
+            if (tag) {
+                e.preventDefault();
+                if (selectedTag) selectedTag.classList.remove('highlighted-tag');
+                tag.classList.add('highlighted-tag');
+                selectedTag = tag;
+            }
+        });
+
+        addBtn.addEventListener('click', () => {
+            if (!selectedTag) return;
+            const tagText = extractTagFromHref(selectedTag.href);
+            if (tagText && !defaultQuery.includes(tagText)) {
+                defaultQuery += defaultQuery ? ` ${tagText}` : tagText;
+                localStorage.setItem('hitomiDefaultQuery', defaultQuery);
+                updateDefaultQueryUI();
+            }
+            selectedTag.classList.remove('highlighted-tag');
+            selectedTag = null;
+        });
+
+        excludeBtn.addEventListener('click', () => {
+            if (!selectedTag) return;
+            const tagText = extractTagFromHref(selectedTag.href);
+            if (tagText) {
+                const excludeText = `-${tagText}`;
+                if (!defaultQuery.includes(excludeText)) {
+                    defaultQuery += defaultQuery ? ` ${excludeText}` : excludeText;
+                    localStorage.setItem('hitomiDefaultQuery', defaultQuery);
+                    updateDefaultQueryUI();
+                }
+            }
+            selectedTag.classList.remove('highlighted-tag');
+            selectedTag = null;
+        });
+
+        updatePickerButton(pickerBtn, isPickerActive);
     }
 
-    await initializePage();
+    await initializePage(jsonDataMap);
     setupSearch();
     setupDefaultQueryEditor();
-    loadNextPageInIframe(getNextPageUrl());
+    loadNextPageInIframe(getNextPageUrl(), jsonDataMap);
     setupPopupEvents();
-    setupCustomSort();
+    setupCustomSort(jsonDataMap);
 })();
