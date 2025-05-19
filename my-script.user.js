@@ -79,7 +79,7 @@
 
             if (!jsonData) {
                 jsonData = await new Promise((resolve, reject) => {
-                    $.get('http://192.168.3.12:8080/test_final_result.json', (data) => {
+                    $.get('https://raw.githubusercontent.com/tttt369/hitomi_enhanced/refs/heads/master/urls/test_final_result.json?token=GHSAT0AAAAAADC46P3OD5QIWZNXYATERMHY2BKUHDQ', (data) => {
                         resolve(data);
                     }).fail(() => {
                         reject(new Error('Failed to fetch JSON from http://192.168.3.12:8080/test_final_result.json'));
@@ -636,7 +636,11 @@
             const queryParts = defaultQuery.split(' ').filter(part => part.trim());
             queryParts.forEach(part => {
                 const badge = document.createElement('span');
-                badge.className = 'badge bg-success d-flex align-items-center';
+                if (part.match(/^-/)) {
+                    badge.className = 'badge bg-danger d-flex align-items-center';
+                } else {
+                    badge.className = 'badge bg-success d-flex align-items-center';
+                }
                 badge.innerHTML = `${part} <button type="button" class="btn-close btn-close-white ms-1" aria-label="Remove"></button>`;
                 badgesContainer.appendChild(badge);
 
@@ -810,8 +814,14 @@
         let selectedTag = null;
 
         function updatePickerButton(btn, active) {
-            btn.innerHTML = active ? '<i class="bi bi-eyedropper" style="margin-left: 5px;"></i> Select Tag' : '';
-            btn.classList.toggle('btn-warning', active);
+            btn.innerHTML = 'Select Tag';
+            const icon = document.createElement('i');
+            icon.className = 'bi bi-eyedropper';
+            icon.style.marginLeft = '5px';
+            if (!active) {
+                btn.innerHTML = '';
+            }
+            btn.appendChild(icon);
         }
 
         function extractTagFromHref(href) {
@@ -825,7 +835,11 @@
             const queryParts = defaultQuery.split(' ').filter(part => part.trim());
             queryParts.forEach(part => {
                 const badge = document.createElement('span');
-                badge.className = 'badge bg-success d-flex align-items-center';
+                if (part.match(/^-/)) {
+                    badge.className = 'badge bg-danger d-flex align-items-center';
+                } else {
+                    badge.className = 'badge bg-success d-flex align-items-center';
+                }
                 badge.innerHTML = `${part} <button type="button" class="btn-close btn-close-white ms-1" aria-label="Remove"></button>`;
                 badgesContainer.appendChild(badge);
                 badge.querySelector('.btn-close').addEventListener('click', () => {
@@ -842,14 +856,16 @@
 
         pickerBtn.addEventListener('click', () => {
             isPickerActive = !isPickerActive;
+            pickerBtn.classList.toggle('btn-warning', isPickerActive);
             updatePickerButton(pickerBtn, isPickerActive);
             addBtn.disabled = !isPickerActive;
             excludeBtn.disabled = !isPickerActive;
+
             if (!isPickerActive && selectedTag) {
                 selectedTag.classList.remove('highlighted-tag');
                 selectedTag = null;
             }
-        });
+        })
 
         document.addEventListener('click', (e) => {
             if (!isPickerActive) return;
