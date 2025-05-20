@@ -7,6 +7,7 @@ import aiofiles
 from lxml import etree
 from lxml import html
 from aiohttp import ClientResponseError
+from typing import Optional, Dict, Any
 
 # Configuration
 DOWNLOAD_SITEMAP = True
@@ -24,7 +25,7 @@ RESULT_JSON_PATH = "../urls/result.json"
 HITOMI_SITEMAP_INDEX_URL = "https://ltn.gold-usergeneratedcontent.net/sitemap.xml"
 DMM_SITEMAP_INDEX_URL = "https://www.dmm.co.jp/dc/doujin/sitemap_image.xml"
 AGE_CHECK_URL = 'https://www.dmm.co.jp/age_check/=/declared=yes/?rurl=https%3A%2F%2Fgames.dmm.co.jp%2Flist%2Fpc'
-SEARCH_STRING = "%65E5%672C%8A9E" #日本語
+SEARCH_STRING = "%65E5%672C%8A9E"  # 日本語
 DMM_SITEMAP_BATCH_SIZE = 10
 HITOMI_SITEMAP_BATCH_SIZE = 10
 JS_BATCH_SIZE = 500
@@ -41,15 +42,15 @@ DMM_NS = {
 
 os.makedirs(LOCAL_JS_DIR, exist_ok=True)
 
-async def load_local_json(json_path) -> Dict[str, Any]:
+async def load_local_json(json_path: str) -> Dict[str, Any]:
     if os.path.isfile(json_path):
         async with aiofiles.open(json_path, "r", encoding="utf-8") as f:
-            dict = json.loads(await f.read())
+            data = json.loads(await f.read())
         print(f"Loaded data from {json_path}")
-        return dict
+        return data
     return {}
 
-async def process_sitemap_index(session, sitemap_index, dir, dmm=False) -> list[str]:
+async def process_sitemap_index(session, sitemap_index: str, dir: str, dmm: bool = False) -> list[str]:
     sitemap_index_content = await get_sitemap_content(session, sitemap_index, dir)
     root = etree.fromstring(sitemap_index_content)
     if dmm:
@@ -60,7 +61,7 @@ async def process_sitemap_index(session, sitemap_index, dir, dmm=False) -> list[
         print("Found", len(sitemap_urls), "hitomi sitemaps.")
     return sitemap_urls
 
-async def process_sitemap(session, sitemap_urls, sitemap_batch, dmm=False):
+async def process_sitemap(session, sitemap_urls: list[str], sitemap_batch: int, dmm: bool = False):
     count = 0
     for i in range(0, len(sitemap_urls), sitemap_batch):
         batch = sitemap_urls[i:(i + sitemap_batch)]
@@ -87,7 +88,7 @@ async def process_sitemap(session, sitemap_urls, sitemap_batch, dmm=False):
             print(sitemap_url)
     print("found", count)
 
-async def process_js(session, valid_gallery_urls):
+async def process_js(session, valid_gallery_urls: list[str]) -> Dict[str, Any]:
     hitomi_dict = {}
     skiped = 0
     for i in range(0, len(valid_gallery_urls), JS_BATCH_SIZE):
@@ -111,18 +112,18 @@ async def process_js(session, valid_gallery_urls):
                     "artists": artist_name,
                     "japanese_title": data["japanese_title"],
                     "title": data["title"],
-                    "pages": file_count
+                    "pages": int(file_count)  # Convert to int
                 }
             else:
-                skiped +=1
+                skiped += 1
     print("Extracted data for", len(hitomi_dict), "galleries.")
     print("skip", skiped, "galleries.")
     await write_json(HITOMI_JSON_PATH, hitomi_dict)
     return hitomi_dict
 
-async def write_json(path, content):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(content, f, ensure_ascii=False, indent=4)
+async def write_json(path: str, content: Any) -> None:
+    async with aiofiles.open(path, "w", encoding="utf-8") as f:
+        await f.write(json.dumps(content, ensure_ascii=False, indent=4))
     print("Saved data to", path)
 
 async def make_dmm_json(found_urls) -> Dict[str, Any]:
@@ -133,15 +134,15 @@ async def make_dmm_json(found_urls) -> Dict[str, Any]:
         first_image_title = image_title_elem.text
         loc_url = loc_elem.text
         dmm_dict[loc_url] = {
-            "title" : first_image_title
+            "title": first_image_title
         }
     await write_json(DMM_JSON_PATH, dmm_dict)
     return dmm_dict
 
-async def scrape_dmm(client, hitomi_dict, dmm_dict, url, hitomi_key):
+async def scrape_dmm(session, hitomi_dict: Dict[str, Any], dmm_dict: Dict[str, Any], url: str, hitomi_key: str) -> Dict[str, Any]:
     result_dict = {}
 
-    async with client.get(url) as response:
+    async with session.get(url) as response:
         try:
             response.raise_for_status()
             text = await response.text()
@@ -159,21 +160,23 @@ async def scrape_dmm(client, hitomi_dict, dmm_dict, url, hitomi_key):
     artist_name = match.group(2) if match else ""
 
     star_element = tree.xpath("//*[contains(@class, 'u-common__ico--review')]")
-    stars = None
+    stars = 0  # Default to 0
     if star_element:
         star_class = star_element[0].get("class", "")
         raw_stars = re.search(r"u-common__ico--review([0-5][0-5])", star_class)
         if raw_stars:
-            stars = raw_stars.group(1)
+            stars = int(raw_stars.group(1))  # Convert to int
 
     num_stars_element = tree.xpath('//span[@class="userReview__txt"]')
-    num_stars = None
+    num_stars = 0  # Default to 0
     if num_stars_element:
         raw_text = num_stars_element[0].text_content()
         num_stars = re.sub(r'\s+|[()件]', '', raw_text)
+        num_stars = int(num_stars) if num_stars != "-" else 0
 
-    if num_stars == "-":
-        num_stars = 1
+    # Apply the rule: if stars == 0 and num_stars == 1, set num_stars to 0
+    if stars == 0 and num_stars == 1:
+        num_stars = 0
 
     hitomi_dict[hitomi_key].update({
         "dmm_url": url,
@@ -183,12 +186,16 @@ async def scrape_dmm(client, hitomi_dict, dmm_dict, url, hitomi_key):
         "num_stars": num_stars
     })
 
-    result_dict[hitomi_key] = hitomi_dict[hitomi_key]
+    # Structure result_dict as a list entry with "id"
+    result_dict = {
+        "id": hitomi_key,
+        **hitomi_dict[hitomi_key]
+    }
 
-    print(hitomi_dict[hitomi_key])
+    print(result_dict)
     return result_dict
 
-async def get_sitemap_content(session, url, dir=None) -> bytes:
+async def get_sitemap_content(session, url: str, dir: Optional[str] = None) -> bytes:
     filename = os.path.basename(url)
     if READ_LOCAL_SITEMAP and dir:
         if not os.path.exists(dir):
@@ -205,20 +212,19 @@ async def get_sitemap_content(session, url, dir=None) -> bytes:
             if not os.path.exists(dir):
                 os.makedirs(dir)
             local_path = os.path.join(dir, filename)
-            if not os.path.exists(local_path): 
+            if not os.path.exists(local_path):
                 async with aiofiles.open(local_path, "wb") as f:
                     print("download to local", local_path)
                     await f.write(content)
     return content
 
-async def get_js_content(session, url, dir=None) -> str:
+async def get_js_content(session, url: str, dir: Optional[str] = None) -> str:
     filename = os.path.basename(url)
     if READ_LOCAL_JS and dir:
         path = os.path.join(dir, filename)
         if os.path.exists(path):
             local_path = os.path.join(dir, filename)
             async with aiofiles.open(local_path, "r") as f:
-                # print("read from local", local_path)
                 return await f.read()
 
     async with session.get(url) as response:
@@ -226,7 +232,7 @@ async def get_js_content(session, url, dir=None) -> str:
         content = bytes_content.decode("utf-8")
         if DOWNLOAD_JS and dir:
             local_path = os.path.join(dir, filename)
-            if not os.path.exists(local_path): 
+            if not os.path.exists(local_path):
                 async with aiofiles.open(local_path, "w") as f:
                     print("download to local", local_path)
                     await f.write(content)
@@ -236,7 +242,7 @@ async def main():
     hitomi_dict = {}
     if HITOMI_READ_FROM_OUTPUT:
         hitomi_dict = await load_local_json(HITOMI_JSON_PATH)
-    if hitomi_dict == {}:
+    if not hitomi_dict:
         sitemap_urls = []
         found_urls = []
         async with aiohttp.ClientSession() as session:
@@ -248,7 +254,7 @@ async def main():
     dmm_dict = {}
     if DMM_READ_FROM_OUTPUT:
         dmm_dict = await load_local_json(DMM_JSON_PATH)
-    if dmm_dict == {}:
+    if not dmm_dict:
         sitemap_urls = []
         async with aiohttp.ClientSession() as session:
             sitemap_urls = await process_sitemap_index(session, DMM_SITEMAP_INDEX_URL, SITEMAP_DIR, dmm=True)
@@ -261,19 +267,35 @@ async def main():
             title = title.replace(" ", "")
             hitomi_title_map.setdefault(title, []).append(hitomi_key)
 
+    # Deduplicate matched_dmm_urls based on dmm_title
     matched_dmm_urls = []
+    seen_titles = set()
     for dmm_key, dmm_value in dmm_dict.items():
         dmm_title = dmm_value.get("title")
         dmm_title = dmm_title.replace(" ", "")
-        if dmm_title in hitomi_title_map:
-            for hitomi_key in hitomi_title_map[dmm_title]:
-                matched_dmm_urls.append((dmm_key, hitomi_key))
+        if dmm_title in hitomi_title_map and dmm_title not in seen_titles:
+            seen_titles.add(dmm_title)
+            # Take the first hitomi_key for this title to avoid duplicates
+            hitomi_key = hitomi_title_map[dmm_title][0]
+            matched_dmm_urls.append((dmm_key, hitomi_key))
+
+    result_list = []
     if os.path.exists(RESULT_JSON_PATH):
-        result_dict = await load_local_json(RESULT_JSON_PATH)
-        matched_dmm_urls = matched_dmm_urls[len(result_dict):]
-        print("continue from ", len(result_dict))
-    else:
-        result_dict = {}
+        existing_data = await load_local_json(RESULT_JSON_PATH)
+        if existing_data:
+            # Convert existing data to list format if it's a dict
+            if isinstance(existing_data, dict):
+                existing_data = [{"id": k, **v} for k, v in existing_data.items()]
+            result_list = existing_data
+            # Update seen_titles with existing DMM titles
+            seen_titles = set()
+            seen_titles.update(item["dmm_title"].replace(" ", "") for item in result_list)
+            # Filter out already processed URLs
+            matched_dmm_urls = [
+                (url, id) for url, id in matched_dmm_urls
+                if dmm_dict[url]["title"].replace(" ", "") not in seen_titles
+            ]
+            print("continue from", len(result_list))
 
     async with aiohttp.ClientSession() as session:
         session.cookie_jar.update_cookies({'age_check_done': '1'})
@@ -287,10 +309,13 @@ async def main():
             ]
             batch_results = await asyncio.gather(*tasks)
             for res in batch_results:
-                result_dict.update(res)
-            await write_json(RESULT_JSON_PATH, result_dict)
-    await write_json(RESULT_JSON_PATH, result_dict)
-    print(result_dict)
+                if res:  # Only append non-empty results
+                    result_list.append(res)
+            # Sort by stars * num_stars in descending order
+            result_list = sorted(result_list, key=lambda x: x["stars"] * x["num_stars"], reverse=True)
+            await write_json(RESULT_JSON_PATH, result_list)
+    await write_json(RESULT_JSON_PATH, result_list)
+    # print(result_list)
 
 if __name__ == "__main__":
     asyncio.run(main())
