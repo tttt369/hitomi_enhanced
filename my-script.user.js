@@ -79,10 +79,10 @@
 
             if (!jsonData) {
                 jsonData = await new Promise((resolve, reject) => {
-                    $.get('https://raw.githubusercontent.com/tttt369/hitomi_enhanced/refs/heads/master/urls/test_final_result.json?token=GHSAT0AAAAAADC46P3OD5QIWZNXYATERMHY2BKUHDQ', (data) => {
+                    $.get('https://github.com/tttt369/hitomi_enhanced/raw/refs/heads/master/urls/result.json', (data) => {
                         resolve(data);
                     }).fail(() => {
-                        reject(new Error('Failed to fetch JSON from http://192.168.3.12:8080/test_final_result.json'));
+                        reject(new Error('Failed to fetch JSON'));
                     });
                 });
                 await storeJsonInIndexedDB(db, jsonData);
