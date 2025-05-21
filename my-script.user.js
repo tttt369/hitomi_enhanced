@@ -11,6 +11,7 @@
 // @exclude      https://hitomi.la/reader/*
 // @grant        GM_addStyle
 // @grant        GM_getResourceText
+// @grant        GM_xmlhttpRequest
 // @require      https://code.jquery.com/jquery-3.7.1.js
 // @require      https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js
 // ==/UserScript==
