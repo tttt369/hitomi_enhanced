@@ -26,20 +26,20 @@ This script works on any device that supports a userscript manager.
    - [Violentmonkey for Firefox](https://addons.mozilla.org/en-US/firefox/addon/violentmonkey/)
    - [Violentmonkey for Chrome](https://chromewebstore.google.com/detail/violentmonkey/jinjaccalgkegednnccohejagnlnfdag)
 2. Install the Userscript:
-   - [Direct install link](https://github.com/tttt369/hitomi_enhanced/blob/master/my-script.user.js)
+   - [Direct install link](https://github.com/tttt369/hitomi_enhanced/raw/refs/heads/master/my-script.user.js)
 3. Open [hitomi.la](https://hitomi.la) and refresh the page
 
 ### Android
 
 1. Install [Violentmonkey for Firefox](https://addons.mozilla.org/en-US/firefox/addon/violentmonkey/)
-2. Install the Userscript using the same [direct install link](https://github.com/tttt369/hitomi_enhanced/blob/master/my-script.user.js)
+2. Install the Userscript using the same [direct install link](https://github.com/tttt369/hitomi_enhanced/raw/refs/heads/master/my-script.user.js)
 3. Open [hitomi.la](https://hitomi.la) and refresh the page
 
 ### iOS
 
 1. Install the [Userscripts](https://itunes.apple.com/us/app/userscripts/id1463298887) extension from App Store
 2. Go to **Settings > Safari > Extensions** and enable the extension
-3. Visit the [Userscript URL](https://github.com/tttt369/hitomi_enhanced/blob/master/my-script.user.js)
+3. Visit the [Userscript URL](https://github.com/tttt369/hitomi_enhanced/raw/refs/heads/master/my-script.user.js)
 4. In Safari:
    - Tap the **AA** button (or extensions icon) in the address bar
    - Select **Userscripts**
