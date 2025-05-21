@@ -79,16 +79,43 @@
 
             if (!jsonData) {
                 jsonData = await new Promise((resolve, reject) => {
-                    $.get('https://github.com/tttt369/hitomi_enhanced/raw/refs/heads/master/urls/result.json', (data) => {
-                        resolve(data);
-                    }).fail(() => {
-                        reject(new Error('Failed to fetch JSON'));
+                    GM_xmlhttpRequest({
+                        method: 'GET',
+                        url: 'https://raw.githubusercontent.com/tttt369/hitomi_enhanced/master/urls/result.json',
+                        onload: (response) => {
+                            try {
+                                // レスポンスをJSONとしてパース
+                                const data = JSON.parse(response.responseText);
+                                resolve(data);
+                            } catch (e) {
+                                reject(new Error('Failed to parse JSON: ' + e.message));
+                            }
+                        },
+                        onerror: () => {
+                            reject(new Error('Failed to fetch JSON'));
+                        }
                     });
                 });
                 await storeJsonInIndexedDB(db, jsonData);
             }
 
-            const jsonDataMap = {}
+            // jsonDataが文字列の場合、パースを試みる
+            if (typeof jsonData === 'string') {
+                try {
+                    jsonData = JSON.parse(jsonData);
+                } catch (e) {
+                    console.error('Failed to parse stored JSON:', e);
+                    return {};
+                }
+            }
+
+            // jsonDataが配列でない場合のエラーハンドリング
+            if (!Array.isArray(jsonData)) {
+                console.error('jsonData is not an array:', jsonData);
+                return {};
+            }
+
+            const jsonDataMap = {};
             jsonData.forEach((item, index) => {
                 jsonDataMap[index] = item;
             });
