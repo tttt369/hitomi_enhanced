@@ -324,13 +324,17 @@
             const list = isList ? Array.from(listOrItem) : [listOrItem];
             const text = list.length && list[0].textContent ? list[0].textContent : defaultText;
             const raw_url = list.length && list[0].href ? list[0].href : "#";
+            const type_content = raw_url.match(/^https:\/\/hitomi\.la\/.*\/(.*)-all\.html$/) || raw_url.match(/^https:\/\/hitomi\.la\/index-(.*)\.html$/);
             const aTag = $(`<a>${text}</a>`);
 
             tbody.append(`<tr><td class="type">${type}</td><td class="colon">:</td><td></td></tr>`);
             tbody.find('tr:last td:last').append(aTag);
 
             if (list.length && list[0].textContent) {
-                aTag.attr('href', defaultQuery === '' ? raw_url : `${default_url + urlPrefix}${encode_search_query_for_url(text)}`);
+                console.log(defaultQuery)
+                console.log(type)
+                console.log(type_content[1])
+                aTag.attr('href', defaultQuery === '' ? raw_url : `${default_url} ${type}:${type_content[1]}`);
             }
 
             if (isList && list.length > 1) {
@@ -893,6 +897,16 @@
             return match ? encode_search_query_for_url(decodeURIComponent(match[1])) : null;
         }
 
+        function extractTypeFromTable(a) {
+            console.log('using extractTypeFromTable');
+            console.log(a);
+            const hrefValue = a.getAttribute('href');
+            console.log(hrefValue);
+            const match = hrefValue.match(/^https:\/\/hitomi\.la\/(.*)\/(.*)-all\.html$/);
+            console.log(match);
+            return match ? match[1] + ':' + encode_search_query_for_url(decodeURIComponent(match[2])) : hrefValue.match(/.* (.*)/);
+        }
+
         function updateDefaultQueryUI() {
             console.log('using updateDefaultQueryUI');
             const badgesContainer = document.querySelector('.default-query-badges');
@@ -926,9 +940,9 @@
             addBtn.disabled = !isPickerActive;
             excludeBtn.disabled = !isPickerActive;
 
-            if (!isPickerActive && selectedTag) {
-                selectedTag.classList.remove('highlighted-tag');
-                selectedType.classList.remove('highlighted-tag');
+            if (!isPickerActive && (selectedTag || selectedType)) {
+                if (selectedTag) selectedTag.classList.remove('highlighted-tag');
+                if (selectedType) selectedType.classList.remove('highlighted-tag');
                 selectedTag = null;
                 selectedType = null;
             }
@@ -946,7 +960,7 @@
         });
         document.addEventListener('click', (e) => {
             if (!isPickerActive) return;
-            const type = e.target.closest('table');
+            const type = e.target.closest('table tr td a');
             if (type) {
                 e.preventDefault();
                 if (selectedType) selectedType.classList.remove('highlighted-tag');
@@ -955,31 +969,69 @@
             }
         });
         addBtn.addEventListener('click', () => {
-            if (!selectedTag) return;
-            const tagText = extractTagFromHref(selectedTag.href);
-            if (tagText && !defaultQuery.includes(tagText)) {
-                defaultQuery += defaultQuery ? ` ${tagText}` : tagText;
-                localStorage.setItem('hitomiDefaultQuery', defaultQuery);
-                updateDefaultQueryUI();
-            }
-            selectedTag.classList.remove('highlighted-tag');
-            selectedTag = null;
-        });
-
-        excludeBtn.addEventListener('click', () => {
-            if (!selectedTag) return;
-            const tagText = extractTagFromHref(selectedTag.href);
-            if (tagText) {
-                const excludeText = `-${tagText}`;
-                if (!defaultQuery.includes(excludeText)) {
-                    defaultQuery += defaultQuery ? ` ${excludeText}` : excludeText;
+            if (selectedTag) {
+                const tagText = extractTagFromHref(selectedTag.href);
+                if (tagText && !defaultQuery.includes(tagText)) {
+                    defaultQuery += defaultQuery ? ` ${tagText}` : tagText;
                     localStorage.setItem('hitomiDefaultQuery', defaultQuery);
                     updateDefaultQueryUI();
                 }
+                selectedTag.classList.remove('highlighted-tag');
+                selectedTag = null;
+            } else if (selectedType) {
+                const typeText = extractTypeFromTable(selectedType);
+                if (typeText && !defaultQuery.includes(typeText)) {
+                    defaultQuery += defaultQuery ? ` ${typeText}` : typeText;
+                    localStorage.setItem('hitomiDefaultQuery', defaultQuery);
+                    updateDefaultQueryUI();
+                }
+                selectedType.classList.remove('highlighted-tag');
+                selectedType = null;
             }
-            selectedTag.classList.remove('highlighted-tag');
-            selectedTag = null;
         });
+
+        excludeBtn.addEventListener('click', () => {
+            if (selectedTag) {
+                const tagText = extractTagFromHref(selectedTag.href);
+                if (tagText) {
+                    const excludeText = `-${tagText}`;
+                    if (!defaultQuery.includes(excludeText)) {
+                        defaultQuery += defaultQuery ? ` ${excludeText}` : excludeText;
+                        localStorage.setItem('hitomiDefaultQuery', defaultQuery);
+                        updateDefaultQueryUI();
+                    }
+                }
+                selectedTag.classList.remove('highlighted-tag');
+                selectedTag = null;
+            } else if (selectedType) {
+                const typeText = extractTypeFromTable(selectedType);
+                if (typeText) {
+                    const excludeText = `-${typeText}`;
+                    if (!defaultQuery.includes(excludeText)) {
+                        defaultQuery += defaultQuery ? ` ${excludeText}` : excludeText;
+                        localStorage.setItem('hitomiDefaultQuery', defaultQuery);
+                        updateDefaultQueryUI();
+                    }
+                }
+                selectedType.classList.remove('highlighted-tag');
+                selectedType = null;
+            }
+        });
+
+        // excludeBtn.addEventListener('click', () => {
+        //     if (!(selectedType || selectedTag)) return;
+        //     const tagText = extractTagFromHref(selectedTag.href);
+        //     if (tagText) {
+        //         const excludeText = `-${tagText}`;
+        //         if (!defaultQuery.includes(excludeText)) {
+        //             defaultQuery += defaultQuery ? ` ${excludeText}` : excludeText;
+        //             localStorage.setItem('hitomiDefaultQuery', defaultQuery);
+        //             updateDefaultQueryUI();
+        //         }
+        //     }
+        //     selectedTag.classList.remove('highlighted-tag');
+        //     selectedTag = null;
+        // });
 
         updatePickerButton(pickerBtn, isPickerActive);
     }
