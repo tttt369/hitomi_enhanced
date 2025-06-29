@@ -30,6 +30,7 @@
 
     // Initialize IndexedDB
     function initIndexedDB() {
+        console.log('using initIndexedDB');
         return new Promise((resolve, reject) => {
             const request = indexedDB.open('HitomiEnhancedDB', 1);
 
@@ -50,6 +51,7 @@
 
     // Store JSON data in IndexedDB
     function storeJsonInIndexedDB(db, jsonData) {
+        console.log('using storeJsonInIndexedDB');
         return new Promise((resolve, reject) => {
             const transaction = db.transaction(['jsonCache'], 'readwrite');
             const store = transaction.objectStore('jsonCache');
@@ -62,6 +64,7 @@
 
     // Retrieve JSON data from IndexedDB
     function getJsonFromIndexedDB(db) {
+        console.log('using getJsonFromIndexedDB');
         return new Promise((resolve, reject) => {
             const transaction = db.transaction(['jsonCache'], 'readonly');
             const store = transaction.objectStore('jsonCache');
@@ -74,6 +77,7 @@
 
     // Fetch JSON data and cache it if not in IndexedDB
     async function getCachedJson() {
+        console.log('using getCachedJson');
         try {
             const db = await initIndexedDB();
             let jsonData = await getJsonFromIndexedDB(db);
@@ -266,6 +270,7 @@
     const batchSize = 25;
 
     async function observeGalleryContents(targetDoc, isInitialPage = false) {
+        console.log('using observeGalleryContents');
         return new Promise((resolve) => {
             const observer = new MutationObserver(() => {
                 const div_gallerycontents = targetDoc.querySelectorAll('div.gallery-content div');
@@ -287,6 +292,7 @@
     }
 
     async function generateCard(contentUrl, title, imgPicture, Tags, seriesList, language, type, ArtistList, stars = 0, jsonDataMap) {
+        console.log('using generateCard');
         const div_col = $('<div class="col"></div>');
         $('.row').append(div_col);
         const div_card = $('<div class="card h-100"></div>');
@@ -410,6 +416,7 @@
     }
 
     function setupTagScrollEvents() {
+        console.log('using setupTagScrollEvents');
         const divDefaultQueryBadges = document.getElementsByClassName('default-query-badges');
         for (const Badge of divDefaultQueryBadges) {
             Badge.addEventListener('wheel', (event) => {
@@ -427,6 +434,7 @@
     }
 
     function setupPopupEvents() {
+        console.log('using setupPopupEvents');
         document.body.addEventListener('click', (e) => {
             const popup = e.target.closest('.popup');
             if (popup) {
@@ -438,6 +446,7 @@
     }
 
     async function initializePage(jsonDataMap) {
+        console.log('using initializePage');
         let initialContents = await observeGalleryContents(document, true);
 
         document.documentElement.innerHTML = html;
@@ -485,6 +494,7 @@
     }
 
     function loadNextPageInIframe(url, jsonDataMap) {
+        console.log('using loadNextPageInIframe');
         const iframe = document.createElement('iframe');
         iframe.style.cssText = 'position: fixed; top: 0; left: 0; width: 1px; height: 1px; border: 0; visibility: hidden;';
         iframe.sandbox = 'allow-same-origin allow-scripts';
@@ -527,6 +537,7 @@
     let hasFetched = false;
 
     function getNextPageUrl() {
+        console.log('using getNextPageUrl');
         const baseUrl = window.location.href.split('#')[0];
         const re_url = /\.html$/;
         currentPage += 1;
@@ -539,6 +550,7 @@
     }
 
     async function setupCustomSort(jsonDataMap) {
+        console.log('using setupCustomSort');
         const newSelect = document.getElementById('custom_sort');
         newSelect.addEventListener('change', (e) => {
             if (e.target.value === 'value2') {
@@ -553,6 +565,7 @@
     }
 
     async function processBatch(jsonDataMap) {
+        console.log('using processBatch');
         if (currentBatchIndex >= jsonData.length) {
             console.log('No more data to process');
             return;
@@ -655,11 +668,13 @@
     });
 
     function setupDefaultQueryEditor() {
+        console.log('using setupDefaultQueryEditor');
         const badgesContainer = document.querySelector('.default-query-badges');
         const defaultQueryInput = document.getElementById('default-query-input');
         const saveButton = document.getElementById('save-default-btn');
 
         function updateBadges() {
+            console.log('using updateBadges');
             badgesContainer.innerHTML = '';
             const queryParts = defaultQuery.split(' ').filter(part => part.trim());
             queryParts.forEach(part => {
@@ -682,12 +697,14 @@
         }
 
         function updateUrl() {
+            console.log('using updateUrl');
             const newDefaultUrl = `https://hitomi.la/search.html?${encodeURI(defaultQuery)}`;
             document.querySelector('.navbar-brand').href = newDefaultUrl;
             default_url = newDefaultUrl;
         }
 
         function savequery() {
+            console.log('using savequery');
             localStorage.setItem('hitomiDefaultQuery', defaultQuery);
             console.log('Default query saved:', defaultQuery);
             saveButton.textContent = 'Saved!';
@@ -695,6 +712,7 @@
         }
 
         function addquery() {
+            console.log('using addquery');
             defaultQuery += ` ${defaultQueryInput.value.trim()}`;
             defaultQueryInput.value = '';
             updateBadges();
@@ -722,6 +740,7 @@
     }
 
     function setupSearch() {
+        console.log('using setupSearch');
         const input = document.getElementById('query-input');
         const form = document.querySelector('form[role="search"]');
         const stickyNavbar = document.querySelector('.sticky-navbar');
@@ -835,6 +854,7 @@
     }
 
     function setupTagPicker() {
+        console.log('using setupTagPicker');
         const pickerBtn = document.getElementById('tag-picker-btn');
         const addBtn = document.getElementById('add-tag-btn');
         const excludeBtn = document.getElementById('exclude-tag-btn');
@@ -842,6 +862,7 @@
         let selectedTag = null;
 
         function updatePickerButton(btn, active) {
+            console.log('using updatePickerButton');
             btn.innerHTML = 'Select Tag';
             const icon = document.createElement('i');
             icon.className = 'bi bi-eyedropper';
@@ -853,11 +874,13 @@
         }
 
         function extractTagFromHref(href) {
+            console.log('using extractTagFromHref');
             const match = href.match(/\/tag\/(.*)-all.html/) || href.match(/search\.html\?.*? (.*)$/);
             return match ? encode_search_query_for_url(decodeURIComponent(match[1])) : null;
         }
 
         function updateDefaultQueryUI() {
+            console.log('using updateDefaultQueryUI');
             const badgesContainer = document.querySelector('.default-query-badges');
             badgesContainer.innerHTML = '';
             const queryParts = defaultQuery.split(' ').filter(part => part.trim());
