@@ -12,6 +12,7 @@
 // @grant        GM_addStyle
 // @grant        GM_getResourceText
 // @grant        GM_xmlhttpRequest
+// @grant        GM_registerMenuCommand
 // @require      https://code.jquery.com/jquery-3.7.1.js
 // @require      https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js
 // ==/UserScript==
@@ -19,13 +20,14 @@
 (async function() {
     'use strict';
 
-    let defaultQuery = localStorage.getItem('hitomiDefaultQuery') || '';
-    const validClasses = ['dj', 'cg', 'acg', 'manga', 'anime', 'imageset'];
+    GM_registerMenuCommand('Delete Default Query', deleteDefaultQuery, {
+        title: 'Delete Default Query'
+    });
 
-    let default_url = defaultQuery ? `https://hitomi.la/search.html?${encodeURI(defaultQuery)}` : 'https://hitomi.la/';
-    if (defaultQuery && window.location.href === 'https://hitomi.la/') {
-        window.location.href = default_url;
-        return;
+    function deleteDefaultQuery() {
+        console.log('using deleteDefaultQuery');
+        defaultQuery = '';
+        localStorage.setItem('hitomiDefaultQuery', '');
     }
 
     // Initialize IndexedDB
@@ -564,6 +566,14 @@
         });
     }
 
+    let defaultQuery = localStorage.getItem('hitomiDefaultQuery') || '';
+    const validClasses = ['dj', 'cg', 'acg', 'manga', 'anime', 'imageset'];
+
+    let default_url = defaultQuery ? `https://hitomi.la/search.html?${encodeURI(defaultQuery)}` : 'https://hitomi.la/';
+    if (defaultQuery && window.location.href === 'https://hitomi.la/') {
+        window.location.href = default_url;
+        return;
+    }
     async function processBatch(jsonDataMap) {
         console.log('using processBatch');
         if (currentBatchIndex >= jsonData.length) {
@@ -873,9 +883,12 @@
             btn.appendChild(icon);
         }
 
-        function extractTagFromHref(href) {
+        function extractTagFromHref(href, defaultQuery) {
             console.log('using extractTagFromHref');
-            const match = href.match(/\/tag\/(.*)-all.html/) || href.match(/search\.html\?.*? (.*)$/);
+            console.log(defaultQuery);
+            console.log(href);
+            const match = href.match(/\/tag\/(.*)-all.html/) || href.match(/.*%20(.*)/);
+            console.log(match);
             return match ? encode_search_query_for_url(decodeURIComponent(match[1])) : null;
         }
 
@@ -931,7 +944,7 @@
 
         addBtn.addEventListener('click', () => {
             if (!selectedTag) return;
-            const tagText = extractTagFromHref(selectedTag.href);
+            const tagText = extractTagFromHref(selectedTag.href, defaultQuery);
             if (tagText && !defaultQuery.includes(tagText)) {
                 defaultQuery += defaultQuery ? ` ${tagText}` : tagText;
                 localStorage.setItem('hitomiDefaultQuery', defaultQuery);
@@ -943,7 +956,7 @@
 
         excludeBtn.addEventListener('click', () => {
             if (!selectedTag) return;
-            const tagText = extractTagFromHref(selectedTag.href);
+            const tagText = extractTagFromHref(selectedTag.href, defaultQuery);
             if (tagText) {
                 const excludeText = `-${tagText}`;
                 if (!defaultQuery.includes(excludeText)) {
