@@ -870,10 +870,11 @@
         const excludeBtn = document.getElementById('exclude-tag-btn');
         let isPickerActive = false;
         let selectedTag = null;
+        let selectedType = null;
 
         function updatePickerButton(btn, active) {
             console.log('using updatePickerButton');
-            btn.innerHTML = 'Select Tag';
+            btn.innerHTML = 'Select Tag or Type';
             const icon = document.createElement('i');
             icon.className = 'bi bi-eyedropper';
             icon.style.marginLeft = '5px';
@@ -883,7 +884,7 @@
             btn.appendChild(icon);
         }
 
-        function extractTagFromHref(href, defaultQuery) {
+        function extractTagFromHref(href) {
             console.log('using extractTagFromHref');
             console.log(defaultQuery);
             console.log(href);
@@ -927,7 +928,9 @@
 
             if (!isPickerActive && selectedTag) {
                 selectedTag.classList.remove('highlighted-tag');
+                selectedType.classList.remove('highlighted-tag');
                 selectedTag = null;
+                selectedType = null;
             }
         })
 
@@ -941,10 +944,19 @@
                 selectedTag = tag;
             }
         });
-
+        document.addEventListener('click', (e) => {
+            if (!isPickerActive) return;
+            const type = e.target.closest('table');
+            if (type) {
+                e.preventDefault();
+                if (selectedType) selectedType.classList.remove('highlighted-tag');
+                type.classList.add('highlighted-tag');
+                selectedType = type;
+            }
+        });
         addBtn.addEventListener('click', () => {
             if (!selectedTag) return;
-            const tagText = extractTagFromHref(selectedTag.href, defaultQuery);
+            const tagText = extractTagFromHref(selectedTag.href);
             if (tagText && !defaultQuery.includes(tagText)) {
                 defaultQuery += defaultQuery ? ` ${tagText}` : tagText;
                 localStorage.setItem('hitomiDefaultQuery', defaultQuery);
@@ -956,7 +968,7 @@
 
         excludeBtn.addEventListener('click', () => {
             if (!selectedTag) return;
-            const tagText = extractTagFromHref(selectedTag.href, defaultQuery);
+            const tagText = extractTagFromHref(selectedTag.href);
             if (tagText) {
                 const excludeText = `-${tagText}`;
                 if (!defaultQuery.includes(excludeText)) {
