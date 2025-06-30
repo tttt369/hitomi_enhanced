@@ -30,7 +30,6 @@
         localStorage.setItem('hitomiDefaultQuery', '');
     }
 
-    // Initialize IndexedDB
     function initIndexedDB() {
         console.log('using initIndexedDB');
         return new Promise((resolve, reject) => {
@@ -51,47 +50,49 @@
         });
     }
 
-    // Store JSON data in IndexedDB
-    function storeJsonInIndexedDB(db, jsonData) {
+    function storeJsonInIndexedDB(db, jsonData, key) {
         console.log('using storeJsonInIndexedDB');
         return new Promise((resolve, reject) => {
             const transaction = db.transaction(['jsonCache'], 'readwrite');
             const store = transaction.objectStore('jsonCache');
-            const request = store.put(jsonData, 'test_final_result');
+            const request = store.put(jsonData, key);
 
-            request.onsuccess = () => resolve(console.log("cached Json"));
-            request.onerror = () => reject(new Error('Failed to store JSON in IndexedDB: ' + request.error));
+            request.onsuccess = () => resolve(console.log(`Cached JSON with key: ${key}`));
+            request.onerror = () => reject(new Error(`Failed to store JSON in IndexedDB: ${request.error}`));
         });
     }
 
-    // Retrieve JSON data from IndexedDB
-    function getJsonFromIndexedDB(db) {
+    function getJsonFromIndexedDB(db, key) {
         console.log('using getJsonFromIndexedDB');
         return new Promise((resolve, reject) => {
             const transaction = db.transaction(['jsonCache'], 'readonly');
             const store = transaction.objectStore('jsonCache');
-            const request = store.get('test_final_result');
+            const request = store.get(key);
 
             request.onsuccess = () => resolve(request.result || null);
-            request.onerror = () => reject(new Error('Failed to retrieve JSON from IndexedDB: ' + request.error));
+            request.onerror = () => reject(new Error(`Failed to retrieve JSON from IndexedDB: ${request.error}`));
         });
     }
 
-    // Fetch JSON data and cache it if not in IndexedDB
-    async function getCachedJson() {
+    async function getCachedJson(hitomi_data = null) {
         console.log('using getCachedJson');
         try {
             const db = await initIndexedDB();
-            let jsonData = await getJsonFromIndexedDB(db);
+            const isHitomiData = hitomi_data !== null && hitomi_data !== undefined;
+            const url = isHitomiData
+                ? 'https://raw.githubusercontent.com/tttt369/hitomi_enhanced/master/urls/hitomi_data.json'
+                : 'https://raw.githubusercontent.com/tttt369/hitomi_enhanced/master/urls/result.json';
+            const cacheKey = isHitomiData ? 'hitomi_data_json' : 'result_json';
+
+            let jsonData = await getJsonFromIndexedDB(db, cacheKey);
 
             if (!jsonData) {
                 jsonData = await new Promise((resolve, reject) => {
                     GM_xmlhttpRequest({
                         method: 'GET',
-                        url: 'https://raw.githubusercontent.com/tttt369/hitomi_enhanced/master/urls/result.json',
+                        url: url,
                         onload: (response) => {
                             try {
-                                // レスポンスをJSONとしてパース
                                 const data = JSON.parse(response.responseText);
                                 resolve(data);
                             } catch (e) {
@@ -99,14 +100,13 @@
                             }
                         },
                         onerror: () => {
-                            reject(new Error('Failed to fetch JSON'));
+                            reject(new Error(`Failed to fetch JSON from ${url}`));
                         }
                     });
                 });
-                await storeJsonInIndexedDB(db, jsonData);
+                await storeJsonInIndexedDB(db, jsonData, cacheKey);
             }
 
-            // jsonDataが文字列の場合、パースを試みる
             if (typeof jsonData === 'string') {
                 try {
                     jsonData = JSON.parse(jsonData);
@@ -116,26 +116,35 @@
                 }
             }
 
-            // jsonDataが配列でない場合のエラーハンドリング
+            // hitomi_data.json の場合はオブジェクトをそのまま返す
+            if (isHitomiData) {
+                if (typeof jsonData !== 'object' || jsonData === null) {
+                    console.error('jsonData is not a valid object:', jsonData);
+                    return {};
+                }
+                return jsonData;
+            }
+
+            // result.json の場合は配列を期待し、オブジェクトに変換
             if (!Array.isArray(jsonData)) {
                 console.error('jsonData is not an array:', jsonData);
                 return {};
             }
 
-            const jsonDataMap = {};
+            const resultJsonMap = {};
             jsonData.forEach((item, index) => {
-                jsonDataMap[index] = item;
+                resultJsonMap[index] = item;
             });
 
-            return jsonDataMap;
+            return resultJsonMap;
         } catch (error) {
             console.error(error);
             return {};
         }
     }
 
-    // Load JSON data
-    const jsonDataMap = await getCachedJson();
+    const resultJsonMap = await getCachedJson();
+    const hitomiJsonMap = await getCachedJson(true);
 
     const html = `
         <!DOCTYPE html>
@@ -293,7 +302,26 @@
         });
     }
 
-    async function generateCard(contentUrl, title, imgPicture, Tags, seriesList, language, type, ArtistList, stars = 0, jsonDataMap) {
+    async function getPageCount(id, json) {
+        let page_count
+        const item = Object.keys(json).find(key => key == id);
+        if (item) {
+            page_count = item.pages;
+        } else {
+            $.getScript(`https://ltn.gold-usergeneratedcontent.net/galleries/${id}.js`, function() {
+                if (typeof galleryinfo !== 'undefined' && galleryinfo.files) {
+                    page_count = galleryinfo.files.length;
+                }
+            }).fail(() => {
+                console.error('Failed to load gallery script:', id);
+                page_count = 'N/A';
+            });
+        }
+        console.log("page_count:", page_count);
+        return page_count
+    }
+
+    async function generateCard(contentUrl, title, imgPicture, Tags, seriesList, language, type, ArtistList, stars = 0, resultJsonMap) {
         console.log('using generateCard');
         const div_col = $('<div class="col"></div>');
         $('.row').append(div_col);
@@ -348,34 +376,24 @@
         appendListRow('artist', ArtistList, ' artist:', div_card_body);
         appendListRow('series', seriesList, ' series:', div_card_body);
 
-        const div_numstar_container = $('<div class="numstar-container"></div>');
-        div_card_body.append(div_numstar_container);
 
-        const h6_pagenum = $('<h6 class="badge bg-secondary">Loading...</h6>');
-        div_numstar_container.append(h6_pagenum);
+        let galleryId;
         const re_num = contentUrl.match(/.*-(\d+)\.html/);
-        let galleryId
         if (re_num && re_num[1]) {
             galleryId = re_num[1];
-            const item = Object.values(jsonDataMap).find(item => item.id === galleryId);
-            if (item) {
-                h6_pagenum.text(`${item.pages}p`);
-            } else {
-                $.getScript(`https://ltn.gold-usergeneratedcontent.net/galleries/${galleryId}.js`, function() {
-                    if (typeof galleryinfo !== 'undefined' && galleryinfo.files) {
-                        h6_pagenum.text(`${galleryinfo.files.length}p`);
-                    }
-                }).fail(() => {
-                    console.error('Failed to load gallery script:', galleryId);
-                    h6_pagenum.text('N/A');
-                });
-            }
         } else {
-            h6_pagenum.text('N/A');
+            console.log('Failed to extract gallery ID from URL:', contentUrl);
         }
 
+        const div_numstar_container = $('<div class="numstar-container"></div>');
+        div_card_body.append(div_numstar_container);
+        const h6_pagenum = $('<h6 class="badge bg-secondary">Loading...</h6>');
+        const page_count = await getPageCount(galleryId, hitomiJsonMap);
+        h6_pagenum.text(`${page_count}p`);
+        div_numstar_container.append(h6_pagenum);
+
         const h6_star = $('<h6 class="star"></h6>');
-        const json_items = Object.values(jsonDataMap).find(item => item.id === galleryId);
+        const json_items = Object.values(resultJsonMap).find(item => item.id === galleryId);
         if (json_items) {
             const a_StarHref = $("<a></a>")
             a_StarHref.attr("href", json_items.dmm_url);
@@ -451,7 +469,7 @@
         });
     }
 
-    async function initializePage(jsonDataMap) {
+    async function initializePage(resultJsonMap) {
         console.log('using initializePage');
         let initialContents = await observeGalleryContents(document, true);
 
@@ -490,7 +508,7 @@
                 item.querySelector('table.dj-desc tbody tr:nth-child(2) td a') || { textContent: 'Unknown', href: '#' },
                 item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' },
                 0,
-                jsonDataMap
+                resultJsonMap
             );
         });
 
@@ -499,7 +517,7 @@
         setupTagPicker();
     }
 
-    function loadNextPageInIframe(url, jsonDataMap) {
+    function loadNextPageInIframe(url, resultJsonMap) {
         console.log('using loadNextPageInIframe');
         const iframe = document.createElement('iframe');
         iframe.style.cssText = 'position: fixed; top: 0; left: 0; width: 1px; height: 1px; border: 0; visibility: hidden;';
@@ -522,7 +540,7 @@
                         item.querySelector('table.dj-desc tbody tr:nth-child(2) td a') || { textContent: 'Unknown', href: '#' },
                         item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' },
                         0,
-                        jsonDataMap
+                        resultJsonMap
                     );
                 });
                 console.log(`Page ${currentPage} loaded`);
@@ -555,7 +573,7 @@
         }
     }
 
-    async function setupCustomSort(jsonDataMap) {
+    async function setupCustomSort(resultJsonMap) {
         console.log('using setupCustomSort');
         const newSelect = document.getElementById('custom_sort');
         newSelect.addEventListener('change', (e) => {
@@ -564,8 +582,8 @@
                 jsonData = [];
                 $('.row').empty();
 
-                jsonData = Object.values(jsonDataMap).sort((a, b) => (b.stars || 0) - (a.stars || 0));
-                processBatch(jsonDataMap);
+                jsonData = Object.values(resultJsonMap).sort((a, b) => (b.stars || 0) - (a.stars || 0));
+                processBatch(resultJsonMap);
             }
         });
     }
@@ -578,7 +596,7 @@
         window.location.href = default_url;
         return;
     }
-    async function processBatch(jsonDataMap) {
+    async function processBatch(resultJsonMap) {
         console.log('using processBatch');
         if (currentBatchIndex >= jsonData.length) {
             console.log('No more data to process');
@@ -646,7 +664,7 @@
                         item.querySelector('table.dj-desc tbody tr:nth-child(2) td a') || { textContent: 'Unknown', href: '#' },
                         item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' },
                         stars,
-                        jsonDataMap
+                        resultJsonMap
                     );
                 });
             });
@@ -666,9 +684,9 @@
         if ((window.scrollY + window.innerHeight) >= document.documentElement.scrollHeight * 0.9) {
             hasFetched = true;
             if (jsonData.length > 0) {
-                processBatch(jsonDataMap);
+                processBatch(resultJsonMap);
             } else {
-                loadNextPageInIframe(getNextPageUrl(), jsonDataMap);
+                loadNextPageInIframe(getNextPageUrl(), resultJsonMap);
             }
         }
     };
@@ -1036,10 +1054,10 @@
         updatePickerButton(pickerBtn, isPickerActive);
     }
 
-    await initializePage(jsonDataMap);
+    await initializePage(resultJsonMap);
     setupSearch();
     setupDefaultQueryEditor();
-    loadNextPageInIframe(getNextPageUrl(), jsonDataMap);
+    loadNextPageInIframe(getNextPageUrl(), resultJsonMap);
     setupPopupEvents();
-    setupCustomSort(jsonDataMap);
+    setupCustomSort(resultJsonMap);
 })();

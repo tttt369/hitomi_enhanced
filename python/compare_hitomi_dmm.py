@@ -7,7 +7,7 @@ import aiofiles
 from lxml import etree
 from lxml import html
 from aiohttp import ClientResponseError
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, List, Any
 
 # Configuration
 DOWNLOAD_SITEMAP = True
@@ -19,9 +19,9 @@ DMM_READ_FROM_OUTPUT = True
 
 SITEMAP_DIR = "../urls/sitemap"
 LOCAL_JS_DIR = "../urls/id_js"
-HITOMI_JSON_PATH = "../urls/hitomi_data.json"
-DMM_JSON_PATH = "../urls/dmm_data.json"
-RESULT_JSON_PATH = "../urls/result.json"
+HITOMI_LIST_PATH = "../urls/hitomi_data.json"
+DMM_LIST_PATH = "../urls/dmm_data.json"
+RESULT_LIST_PATH = "../urls/result.json"
 HITOMI_SITEMAP_INDEX_URL = "https://ltn.gold-usergeneratedcontent.net/sitemap.xml"
 DMM_SITEMAP_INDEX_URL = "https://www.dmm.co.jp/dc/doujin/sitemap_image.xml"
 AGE_CHECK_URL = 'https://www.dmm.co.jp/age_check/=/declared=yes/?rurl=https%3A%2F%2Fgames.dmm.co.jp%2Flist%2Fpc'
@@ -42,11 +42,11 @@ DMM_NS = {
 
 os.makedirs(LOCAL_JS_DIR, exist_ok=True)
 
-async def load_local_json(json_path: str) -> Dict[str, Any]:
-    if os.path.isfile(json_path):
-        async with aiofiles.open(json_path, "r", encoding="utf-8") as f:
+async def load_local_list(list_path: str) -> List[Dict]:
+    if os.path.isfile(list_path):
+        async with aiofiles.open(list_path, "r", encoding="utf-8") as f:
             data = json.loads(await f.read())
-        print(f"Loaded data from {json_path}")
+        print(f"Loaded data from {list_path}")
         return data
     return {}
 
@@ -88,8 +88,8 @@ async def process_sitemap(session, sitemap_urls: list[str], sitemap_batch: int, 
             print(sitemap_url)
     print("found", count)
 
-async def process_js(session, valid_gallery_urls: list[str]) -> Dict[str, Any]:
-    hitomi_dict = {}
+async def process_js(session, valid_gallery_urls: list[str]) -> List[Dict]:
+    dmm_dict_list = []
     skiped = 0
     for i in range(0, len(valid_gallery_urls), JS_BATCH_SIZE):
         tasks = []
@@ -108,38 +108,44 @@ async def process_js(session, valid_gallery_urls: list[str]) -> Dict[str, Any]:
                 json_id = data.get("id")
                 artist_name = artists[0].get("artist") if isinstance(artists, list) else artists
                 file_count = len(data.get("files", []))
-                hitomi_dict[json_id] = {
-                    "artists": artist_name,
-                    "japanese_title": data["japanese_title"],
-                    "title": data["title"],
-                    "pages": int(file_count)  # Convert to int
-                }
+                dmm_dict_list.append(
+                    {
+                        "id": json_id,
+                        "artists": artist_name,
+                        "japanese_title": data["japanese_title"],
+                        "title": data["title"],
+                        "pages": int(file_count)  # Convert to int
+                    }
+                )
             else:
                 skiped += 1
-    print("Extracted data for", len(hitomi_dict), "galleries.")
+    print("Extracted data for", len(dmm_dict_list), "galleries.")
     print("skip", skiped, "galleries.")
-    await write_json(HITOMI_JSON_PATH, hitomi_dict)
-    return hitomi_dict
+    await write_json(HITOMI_LIST_PATH, dmm_dict_list)
+    return dmm_dict_list
 
 async def write_json(path: str, content: Any) -> None:
     async with aiofiles.open(path, "w", encoding="utf-8") as f:
         await f.write(json.dumps(content, ensure_ascii=False, indent=4))
     print("Saved data to", path)
 
-async def make_dmm_json(found_urls) -> Dict[str, Any]:
-    dmm_dict = {}
+async def make_dmm_list(found_urls) -> List[Dict]:
+    dmm_dict_list = []
     async for url_elem in found_urls:
         image_title_elem = url_elem.find('.//image:title', DMM_NS)
         loc_elem = url_elem.find('.//default:loc', DMM_NS)
         first_image_title = image_title_elem.text
         loc_url = loc_elem.text
-        dmm_dict[loc_url] = {
-            "title": first_image_title
-        }
-    await write_json(DMM_JSON_PATH, dmm_dict)
-    return dmm_dict
+        dmm_dict_list.append(
+            {
+                "url": loc_url,
+                "title": first_image_title
+            }
+        )
+    await write_json(DMM_LIST_PATH, dmm_dict_list)
+    return dmm_dict_list
 
-async def scrape_dmm(session, hitomi_dict: Dict[str, Any], dmm_dict: Dict[str, Any], url: str, hitomi_key: str) -> Dict[str, Any]:
+async def scrape_dmm(session, dmm_dict_list: Dict[str, Any], dmm_dict_list: Dict[str, Any], url: str, hitomi_key: str) -> Dict[str, Any]:
     result_dict = {}
 
     async with session.get(url) as response:
@@ -178,10 +184,10 @@ async def scrape_dmm(session, hitomi_dict: Dict[str, Any], dmm_dict: Dict[str, A
     if stars == 0 and num_stars == 1:
         num_stars = 0
 
-    hitomi_dict[hitomi_key].update({
+    dmm_dict_list[hitomi_key].update({
         "dmm_url": url,
         "dmm_artist_name": artist_name,
-        "dmm_title": dmm_dict[url]["title"],
+        "dmm_title": dmm_dict_list[url]["title"],
         "stars": stars,
         "num_stars": num_stars
     })
@@ -189,7 +195,7 @@ async def scrape_dmm(session, hitomi_dict: Dict[str, Any], dmm_dict: Dict[str, A
     # Structure result_dict as a list entry with "id"
     result_dict = {
         "id": hitomi_key,
-        **hitomi_dict[hitomi_key]
+        **dmm_dict_list[hitomi_key]
     }
 
     print(result_dict)
@@ -239,61 +245,59 @@ async def get_js_content(session, url: str, dir: Optional[str] = None) -> str:
     return content
 
 async def main():
-    hitomi_dict = {}
+    dmm_dict_list = []
     if HITOMI_READ_FROM_OUTPUT:
-        hitomi_dict = await load_local_json(HITOMI_JSON_PATH)
-    if not hitomi_dict:
+        dmm_dict_list = await load_local_list(HITOMI_LIST_PATH)
+    if not dmm_dict_list:
         sitemap_urls = []
         found_urls = []
         async with aiohttp.ClientSession() as session:
             sitemap_urls = await process_sitemap_index(session, HITOMI_SITEMAP_INDEX_URL, SITEMAP_DIR)
             async for url in process_sitemap(session, sitemap_urls, HITOMI_SITEMAP_BATCH_SIZE):
                 found_urls.append(url)
-            hitomi_dict = await process_js(session, found_urls)
+            dmm_dict_list = await process_js(session, found_urls)
 
-    dmm_dict = {}
+    dmm_dict_list = {}
     if DMM_READ_FROM_OUTPUT:
-        dmm_dict = await load_local_json(DMM_JSON_PATH)
-    if not dmm_dict:
+        dmm_dict_list = await load_local_list(DMM_LIST_PATH)
+    if not dmm_dict_list:
         sitemap_urls = []
         async with aiohttp.ClientSession() as session:
             sitemap_urls = await process_sitemap_index(session, DMM_SITEMAP_INDEX_URL, SITEMAP_DIR, dmm=True)
-            dmm_dict = await make_dmm_json(process_sitemap(session, sitemap_urls, DMM_SITEMAP_BATCH_SIZE, dmm=True))
+            dmm_dict_list = await make_dmm_list(process_sitemap(session, sitemap_urls, DMM_SITEMAP_BATCH_SIZE, dmm=True))
 
     hitomi_title_map = {}
-    for hitomi_key, hitomi_value in hitomi_dict.items():
-        title = hitomi_value.get("japanese_title") or hitomi_value.get("title")
+    for item in dmm_dict_list:
+        title = item["japanese_title"] or item["title"]
         if title:
             title = title.replace(" ", "")
-            hitomi_title_map.setdefault(title, []).append(hitomi_key)
+            if title not in hitomi_title_map:
+                hitomi_title_map[title] = {
+                    "id": item["id"]
+                }
+        else:
+            print("No title found for item:", item)
 
-    # Deduplicate matched_dmm_urls based on dmm_title
     matched_dmm_urls = []
     seen_titles = set()
-    for dmm_key, dmm_value in dmm_dict.items():
-        dmm_title = dmm_value.get("title")
+    for dmm_dict in dmm_dict_list:
+        dmm_title = dmm_dict.get("title")
+        dmm_key = dmm_dict.get("url")
         dmm_title = dmm_title.replace(" ", "")
         if dmm_title in hitomi_title_map and dmm_title not in seen_titles:
             seen_titles.add(dmm_title)
-            # Take the first hitomi_key for this title to avoid duplicates
-            hitomi_key = hitomi_title_map[dmm_title][0]
+            hitomi_key = hitomi_title_map[dmm_title]["id"]
             matched_dmm_urls.append((dmm_key, hitomi_key))
 
-    result_list = []
-    if os.path.exists(RESULT_JSON_PATH):
-        existing_data = await load_local_json(RESULT_JSON_PATH)
+    if os.path.exists(RESULT_LIST_PATH):
+        existing_data = await load_local_list(RESULT_LIST_PATH)
         if existing_data:
-            # Convert existing data to list format if it's a dict
-            if isinstance(existing_data, dict):
-                existing_data = [{"id": k, **v} for k, v in existing_data.items()]
-            result_list = existing_data
-            # Update seen_titles with existing DMM titles
             seen_titles = set()
-            seen_titles.update(item["dmm_title"].replace(" ", "") for item in result_list)
+            seen_titles.update(item["dmm_title"].replace(" ", "") for item in existing_data)
             # Filter out already processed URLs
             matched_dmm_urls = [
                 (url, id) for url, id in matched_dmm_urls
-                if dmm_dict[url]["title"].replace(" ", "") not in seen_titles
+                if dmm_dict_list[url]["title"].replace(" ", "") not in seen_titles
             ]
             print("continue from", len(result_list))
 
@@ -304,7 +308,7 @@ async def main():
         for i in range(0, len(matched_dmm_urls), 15):
             batch = matched_dmm_urls[i:i+15]
             tasks = [
-                scrape_dmm(session, hitomi_dict, dmm_dict, url, id)
+                scrape_dmm(session, dmm_dict_list, dmm_dict_list, url, id)
                 for url, id in batch
             ]
             batch_results = await asyncio.gather(*tasks)
@@ -313,8 +317,8 @@ async def main():
                     result_list.append(res)
             # Sort by stars * num_stars in descending order
             result_list = sorted(result_list, key=lambda x: x["stars"] * x["num_stars"], reverse=True)
-            await write_json(RESULT_JSON_PATH, result_list)
-    await write_json(RESULT_JSON_PATH, result_list)
+            await write_json(RESULT_LIST_PATH, result_list)
+    await write_json(RESULT_LIST_PATH, result_list)
     # print(result_list)
 
 if __name__ == "__main__":
