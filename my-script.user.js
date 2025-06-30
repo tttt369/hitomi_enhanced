@@ -331,9 +331,6 @@
             tbody.find('tr:last td:last').append(aTag);
 
             if (list.length && list[0].textContent) {
-                console.log(defaultQuery)
-                console.log(type)
-                console.log(type_content[1])
                 aTag.attr('href', defaultQuery === '' ? raw_url : `${default_url} ${type}:${type_content[1]}`);
             }
 
@@ -758,7 +755,10 @@
         const input = document.getElementById('query-input');
         const form = document.querySelector('form[role="search"]');
         const stickyNavbar = document.querySelector('.sticky-navbar');
-
+        const currentQuery = window.location.href.match(/^https:\/\/hitomi\.la\/search\.html\?(.*)/)
+        if (currentQuery) {
+            input.value = decodeURIComponent(currentQuery[1]);
+        }
         input.addEventListener("focus", function() {
             stickyNavbar.classList.add('sticky-navbar--static');
             stickyNavbar.classList.remove('sticky-navbar');
@@ -832,12 +832,20 @@
         };
 
         input.addEventListener('input', () => {
-            const currentValue = input.value.trim();
+            const currentValue = input.value.slice(committedValue.length);
+            console.log("currentValue", currentValue);
             if (!currentValue) {
                 lastInput = '';
                 committedValue = '';
             } else {
-                lastInput = currentValue.slice(committedValue.length).trim();
+                if (currentValue.includes(' ')) {
+                    committedValue += (currentValue);
+                    lastInput = currentValue.slice(committedValue.length).trim();
+                } else {
+                    lastInput = currentValue
+                }
+                console.log("lastInput", lastInput);
+                console.log("committedValue", committedValue);
             }
             handle_keyup_in_search_box();
             setTimeout(updateDropdown, 50);
@@ -899,12 +907,27 @@
 
         function extractTypeFromTable(a) {
             console.log('using extractTypeFromTable');
-            console.log(a);
             const hrefValue = a.getAttribute('href');
             console.log(hrefValue);
-            const match = hrefValue.match(/^https:\/\/hitomi\.la\/(.*)\/(.*)-all\.html$/);
-            console.log(match);
-            return match ? match[1] + ':' + encode_search_query_for_url(decodeURIComponent(match[2])) : hrefValue.match(/.* (.*)/);
+            let match;
+
+            match = hrefValue.match(/^https:\/\/hitomi\.la\/(.*)\/(.*)-all\.html$/);
+            if (match) {
+                return match[1] + ':' + encode_search_query_for_url(decodeURIComponent(match[2]));
+            }
+
+            match = hrefValue.match(/^https:\/\/hitomi\.la\/index-(.*)\.html$/);
+            if (match) {
+                return 'language:' + match[1];
+            }
+
+            match = hrefValue.match(/.* (.*)/);
+            if (match) {
+                return match[1];
+            }
+
+            console.log('No match found for href:', hrefValue);
+            return null;
         }
 
         function updateDefaultQueryUI() {
