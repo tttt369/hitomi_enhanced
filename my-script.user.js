@@ -116,7 +116,6 @@
                 }
             }
 
-            // hitomi_data.json の場合はオブジェクトをそのまま返す
             if (isHitomiData) {
                 if (typeof jsonData !== 'object' || jsonData === null) {
                     console.error('jsonData is not a valid object:', jsonData);
@@ -125,7 +124,6 @@
                 return jsonData;
             }
 
-            // result.json の場合は配列を期待し、オブジェクトに変換
             if (!Array.isArray(jsonData)) {
                 console.error('jsonData is not an array:', jsonData);
                 return {};
@@ -303,22 +301,29 @@
     }
 
     async function getPageCount(id, json) {
-        let page_count
+        console.log('using getPageCount');
         const item = Object.keys(json).find(key => key == id);
         if (item) {
-            page_count = item.pages;
-        } else {
-            $.getScript(`https://ltn.gold-usergeneratedcontent.net/galleries/${id}.js`, function() {
-                if (typeof galleryinfo !== 'undefined' && galleryinfo.files) {
-                    page_count = galleryinfo.files.length;
-                }
-            }).fail(() => {
-                console.error('Failed to load gallery script:', id);
-                page_count = 'N/A';
-            });
+            console.log('Found in cache', json[item].pages);
+            return json[item].pages; // Return directly if found in json
         }
-        console.log("page_count:", page_count);
-        return page_count
+
+        return new Promise((resolve) => {
+            $.getScript(`https://ltn.gold-usergeneratedcontent.net/galleries/${id}.js`)
+                .done(() => {
+                    if (typeof galleryinfo !== 'undefined' && galleryinfo.files) {
+                        const page_count = galleryinfo.files.length;
+                        resolve(page_count);
+                    } else {
+                        console.error('Gallery info not found for ID:', id);
+                        resolve('N/A');
+                    }
+                })
+                .fail(() => {
+                    console.error('Failed to load gallery script:', id);
+                    resolve('N/A');
+                });
+        });
     }
 
     async function generateCard(contentUrl, title, imgPicture, Tags, seriesList, language, type, ArtistList, stars = 0, resultJsonMap) {
@@ -353,6 +358,9 @@
             const text = list.length && list[0].textContent ? list[0].textContent : defaultText;
             const raw_url = list.length && list[0].href ? list[0].href : "#";
             const type_content = raw_url.match(/^https:\/\/hitomi\.la\/.*\/(.*)-all\.html$/) || raw_url.match(/^https:\/\/hitomi\.la\/index-(.*)\.html$/);
+            if (type_content == null) {
+                console.log('listOrItem:', text)
+            }
             const aTag = $(`<a>${text}</a>`);
 
             tbody.append(`<tr><td class="type">${type}</td><td class="colon">:</td><td></td></tr>`);
