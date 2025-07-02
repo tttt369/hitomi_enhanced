@@ -358,18 +358,12 @@
             const text = list.length && list[0].textContent ? list[0].textContent : defaultText;
             const raw_url = list.length && list[0].href ? list[0].href : "#";
             const type_content = raw_url.match(/^https:\/\/hitomi\.la\/.*\/(.*)-all\.html$/) || raw_url.match(/^https:\/\/hitomi\.la\/index-(.*)\.html$/);
-            if (type_content == null) {
-                console.log('listOrItem:', text)
-            }
             const aTag = $(`<a>${text}</a>`);
 
             tbody.append(`<tr><td class="type">${type}</td><td class="colon">:</td><td></td></tr>`);
             tbody.find('tr:last td:last').append(aTag);
 
             if (list.length && list[0].textContent) {
-                console.log(defaultQuery)
-                console.log(type)
-                console.log(type_content[1])
                 aTag.attr('href', defaultQuery === '' ? raw_url : `${default_url} ${type}:${type_content[1]}`);
             }
 
@@ -477,6 +471,25 @@
         });
     }
 
+    async function filterContents(item) {
+        const h1Element = item.querySelector('h1.lillie a');
+        const url = h1Element ? h1Element.href : '#'
+        let galleryId;
+        const re_num = url.match(/.*-(\d+)\.html/);
+        if (re_num && re_num[1]) {
+            galleryId = re_num[1];
+        } else {
+            console.log('Failed to extract gallery ID from URL:', contentUrl);
+        }
+        const page_count = await getPageCount(galleryId, hitomiJsonMap)
+        if (page_count > 20) {
+            return true
+        } else {
+            console.log('Page count is less than or equal to 20:', galleryId);
+        }
+        return false
+    }
+
     async function initializePage(resultJsonMap) {
         console.log('using initializePage');
         let initialContents = await observeGalleryContents(document, true);
@@ -504,21 +517,24 @@
         obj_data.div_header_sort_select[0].appendChild(newSelect);
         if (obj_data.div_header_sort_select) html_row.appendChild(obj_data.div_header_sort_select[0]);
 
-        initialContents.forEach(item => {
+        await Promise.all(initialContents.map(async (item) => {
             const h1Element = item.querySelector('h1.lillie a');
-            generateCard(
-                h1Element ? h1Element.href : '#',
-                h1Element ? h1Element.textContent : 'Unknown',
-                item.querySelector('div[class$="-img1"] picture'),
-                item.querySelectorAll('td.relatedtags ul li a'),
-                item.querySelectorAll('td.series-list ul li a'),
-                item.querySelector('table.dj-desc tbody tr:nth-child(3) td a') || { textContent: 'Unknown', href: '#' },
-                item.querySelector('table.dj-desc tbody tr:nth-child(2) td a') || { textContent: 'Unknown', href: '#' },
-                item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' },
-                0,
-                resultJsonMap
-            );
-        });
+            const bool_result = await filterContents(item);
+            if (bool_result) {
+                generateCard(
+                    h1Element ? h1Element.href : '#',
+                    h1Element ? h1Element.textContent : 'Unknown',
+                    item.querySelector('div[class$="-img1"] picture'),
+                    item.querySelectorAll('td.relatedtags ul li a'),
+                    item.querySelectorAll('td.series-list ul li a'),
+                    item.querySelector('table.dj-desc tbody tr:nth-child(3) td a') || { textContent: 'Unknown', href: '#' },
+                    item.querySelector('table.dj-desc tbody tr:nth-child(2) td a') || { textContent: 'Unknown', href: '#' },
+                    item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' },
+                    0,
+                    resultJsonMap
+                );
+            }
+        }));
 
         setupPopupEvents();
         setupTagScrollEvents();
@@ -536,21 +552,24 @@
             try {
                 const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
                 const nextContents = await observeGalleryContents(iframeDoc);
-                nextContents.forEach(item => {
+                await Promise.all(nextContents.map(async (item) => {
                     const h1Element = item.querySelector('h1.lillie a');
-                    generateCard(
-                        h1Element ? h1Element.href : '#',
-                        h1Element ? h1Element.textContent : 'Unknown',
-                        item.querySelector('div[class$="-img1"] picture'),
-                        item.querySelectorAll('td.relatedtags ul li a'),
-                        item.querySelectorAll('td.series-list ul li a'),
-                        item.querySelector('table.dj-desc tbody tr:nth-child(3) td a') || { textContent: 'Unknown', href: '#' },
-                        item.querySelector('table.dj-desc tbody tr:nth-child(2) td a') || { textContent: 'Unknown', href: '#' },
-                        item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' },
-                        0,
-                        resultJsonMap
-                    );
-                });
+                    const bool_result = await filterContents(item);
+                    if (bool_result) {
+                        generateCard(
+                            h1Element ? h1Element.href : '#',
+                            h1Element ? h1Element.textContent : 'Unknown',
+                            item.querySelector('div[class$="-img1"] picture'),
+                            item.querySelectorAll('td.relatedtags ul li a'),
+                            item.querySelectorAll('td.series-list ul li a'),
+                            item.querySelector('table.dj-desc tbody tr:nth-child(3) td a') || { textContent: 'Unknown', href: '#' },
+                            item.querySelector('table.dj-desc tbody tr:nth-child(2) td a') || { textContent: 'Unknown', href: '#' },
+                            item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' },
+                            0,
+                            resultJsonMap
+                        );
+                    }
+                }));
                 console.log(`Page ${currentPage} loaded`);
                 hasFetched = false;
                 setupPopupEvents();
