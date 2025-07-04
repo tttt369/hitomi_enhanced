@@ -28,6 +28,7 @@
         console.log('using deleteDefaultQuery');
         defaultQuery = '';
         localStorage.setItem('hitomiDefaultQuery', '');
+        localStorage.removeItem('hitomiDefaultPageCount');
     }
 
     function initIndexedDB() {
@@ -175,9 +176,9 @@
                             <button id="save-default-btn" class="btn btn-outline-success">Save</button>
                         </div>
                         <div class="page-count-container">
-                            <input id="sort-pagecount-start" class="form-control" type="int" placeholder="0">
+                            <input id="sort-pagecount-start" class="form-control" type="number" value="0" min="0" placeholder="0">
                             <h5 class="hyphen"> - </h5>
-                            <input id="sort-pagecount-end" class="form-control" type="int" placeholder="empty to unlimited">
+                            <input id="sort-pagecount-end" class="form-control" type="number" value="0" min="0" placeholder="0 to unlimited">
                         </div>
                     </div>
                   </div>
@@ -257,8 +258,8 @@
             .sticky-navbar--static button { font-size: 14px; }
             .hyphen { margin: 1%; }
             .page-count-container { display: flex; margin-top: 10px; }
-            #sort-pagecount-start { width: 7%; }
-            #sort-pagecount-end { width: 35%; }
+            #sort-pagecount-start { flex: 1; }
+            #sort-pagecount-end { flex: 2; }
             @media (max-width: 991px) {
                 .navbar-nav.me-auto { margin-right: 0; flex-basis: 100%; margin-bottom: 10px; }
                 .SearchContainer { flex-basis: 100%; max-width: 100%; }
@@ -286,6 +287,36 @@
     let jsonData = [];
     let currentBatchIndex = 0;
     const batchSize = 25;
+    let count_start = '0';
+    let count_end = '0';
+
+    function loadPageCountFromStorage() {
+        console.log('using loadPageCountFromStorage');
+        const savedPageCount = localStorage.getItem('hitomiDefaultPageCount');
+        if (savedPageCount) {
+            const pageCountArray = JSON.parse(savedPageCount);
+
+            const start = pageCountArray[0] || '0';
+            const end = pageCountArray[1] || '0';
+
+            count_start = start;
+            count_end = end;
+
+            document.getElementById('sort-pagecount-start').value = start || '0';
+            document.getElementById('sort-pagecount-end').value = end || '0';
+        }
+    }
+
+    // ページカウントをローカルストレージに保存
+    function savePageCountToStorage() {
+        console.log('using savePageCountToStorage');
+        const start = document.getElementById('sort-pagecount-start').value.trim();
+        const end = document.getElementById('sort-pagecount-end').value.trim();
+        const pageCountArray = [start || '', end || ''];
+
+        localStorage.setItem('hitomiDefaultPageCount', JSON.stringify(pageCountArray));
+        console.log('Page count saved:', pageCountArray);
+    }
 
     async function observeGalleryContents(targetDoc, isInitialPage = false) {
         console.log('using observeGalleryContents');
@@ -314,7 +345,7 @@
         const item = Object.keys(json).find(key => key == id);
         if (item) {
             console.log('Found in cache', json[item].pages);
-            return json[item].pages; // Return directly if found in json
+            return json[item].pages;
         }
 
         return new Promise((resolve) => {
@@ -387,9 +418,7 @@
         appendListRow('artist', ArtistList, ' artist:', div_card_body);
         appendListRow('series', seriesList, ' series:', div_card_body);
 
-
         let galleryId;
-
         const re_num = contentUrl.match(/.*-(\d+)\.html/);
         if (re_num && re_num[1]) {
             galleryId = re_num[1];
@@ -415,7 +444,6 @@
             const hasHalfStar = finalStars % 10 >= 5 ? 1 : 0;
 
             if (finalStars > 0) {
-
                 for (let i = 0; i < filledStars; i++) {
                     const i_fillstar = $('<i class="bi bi-star-fill"></i>');
                     h6_star.append(i_fillstar);
@@ -486,6 +514,8 @@
         const input_start = document.getElementById('sort-pagecount-start');
         const input_end = document.getElementById('sort-pagecount-end');
 
+        loadPageCountFromStorage();
+
         input_start.addEventListener('input', () => {
             const value = input_start.value.trim();
             console.log('input_start value:', value);
@@ -500,6 +530,10 @@
     }
 
     async function filterContents(item) {
+        loadPageCountFromStorage();
+        console.log("using filterContents");
+        console.log(count_start);
+        console.log(count_end);
         const h1Element = item.querySelector('h1.lillie a');
         const url = h1Element ? h1Element.href : null;
 
@@ -521,16 +555,20 @@
             console.log('Failed to retrieve page count for gallery:', galleryId);
             return false;
         }
-        if (count_start === null && count_end === null) {
+        if (count_start === '0' && count_end === '0') {
+            console.log('1')
             return true;
         }
-        if (count_start !== null && count_end !== null) {
+        if (count_start !== '0' && count_end !== '0') {
             if (count_start <= page_count && page_count <= count_end) {
+                console.log('2')
                 return true;
             }
-        } else if (count_start !== null && page_count >= count_start) {
+        } else if (count_start !== '0' && page_count >= count_start) {
+            console.log('3')
             return true;
-        } else if (count_end !== null && page_count <= count_end) {
+        } else if (count_end !== '0' && page_count <= count_end) {
+            console.log('4')
             return true;
         }
         console.log('Skipped gallery', galleryId, 'page_count:', page_count);
@@ -549,7 +587,6 @@
         const html_row = document.querySelector('.row');
         if (obj_data.div_NextPage) html_container.appendChild(obj_data.div_NextPage[1]);
 
-        // 新しい <select> 要素を作成
         const newSelect = document.createElement('select');
         newSelect.id = 'custom_sort';
 
@@ -564,7 +601,7 @@
         newSelect.appendChild(option2);
 
         if (obj_data.div_header_sort_select) {
-            obj_data.div_header_sort_select[0].appendChild(newSelect); // <select> をその後に追加
+            obj_data.div_header_sort_select[0].appendChild(newSelect);
             html_row.appendChild(obj_data.div_header_sort_select[0]);
         }
 
@@ -639,8 +676,6 @@
 
     let currentPage = parseInt(window.location.hash.replace('#', '') || '1', 10);
     let hasFetched = false;
-    let count_start = null;
-    let count_end = null;
 
     function getNextPageUrl() {
         console.log('using getNextPageUrl');
@@ -678,6 +713,7 @@
         window.location.href = default_url;
         return;
     }
+
     async function processBatch(resultJsonMap) {
         console.log('using processBatch');
         if (currentBatchIndex >= jsonData.length) {
@@ -821,6 +857,7 @@
         function savequery() {
             console.log('using savequery');
             localStorage.setItem('hitomiDefaultQuery', defaultQuery);
+            savePageCountToStorage(); // ページカウントも保存
             console.log('Default query saved:', defaultQuery);
             saveButton.textContent = 'Saved!';
             setTimeout(() => saveButton.textContent = 'Save', 1000);
@@ -847,8 +884,8 @@
                 defaultQueryInput.value = '';
                 updateBadges();
                 updateUrl();
-                savequery();
             }
+            savequery();
         });
 
         updateBadges();
@@ -1062,7 +1099,7 @@
                 selectedTag = null;
                 selectedType = null;
             }
-        })
+        });
 
         document.addEventListener('click', (e) => {
             if (!isPickerActive) return;
@@ -1074,6 +1111,7 @@
                 selectedTag = tag;
             }
         });
+
         document.addEventListener('click', (e) => {
             if (!isPickerActive) return;
             const type = e.target.closest('table tr td a');
@@ -1084,6 +1122,7 @@
                 selectedType = type;
             }
         });
+
         addBtn.addEventListener('click', () => {
             if (selectedTag) {
                 const tagText = extractTagFromHref(selectedTag.href);
@@ -1133,21 +1172,6 @@
                 selectedType = null;
             }
         });
-
-        // excludeBtn.addEventListener('click', () => {
-        //     if (!(selectedType || selectedTag)) return;
-        //     const tagText = extractTagFromHref(selectedTag.href);
-        //     if (tagText) {
-        //         const excludeText = `-${tagText}`;
-        //         if (!defaultQuery.includes(excludeText)) {
-        //             defaultQuery += defaultQuery ? ` ${excludeText}` : excludeText;
-        //             localStorage.setItem('hitomiDefaultQuery', defaultQuery);
-        //             updateDefaultQueryUI();
-        //         }
-        //     }
-        //     selectedTag.classList.remove('highlighted-tag');
-        //     selectedTag = null;
-        // });
 
         updatePickerButton(pickerBtn, isPickerActive);
     }
