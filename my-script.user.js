@@ -174,6 +174,11 @@
                             <input id="default-query-input" class="form-control default-query-input" type="text" placeholder="Add to default query">
                             <button id="save-default-btn" class="btn btn-outline-success">Save</button>
                         </div>
+                        <div class="page-count-container">
+                            <input id="sort-pagecount-start" class="form-control" type="int" placeholder="0">
+                            <h5 class="hyphen"> - </h5>
+                            <input id="sort-pagecount-end" class="form-control" type="int" placeholder="empty to unlimited">
+                        </div>
                     </div>
                   </div>
                 </div>
@@ -250,6 +255,10 @@
             .SearchContainer { flex-shrink: 1; min-width: 0; }
             .sticky-navbar--static { display: flex; position: static; top: 0; background-color: #343a40; }
             .sticky-navbar--static button { font-size: 14px; }
+            .hyphen { margin: 1%; }
+            .page-count-container { display: flex; margin-top: 10px; }
+            #sort-pagecount-start { width: 7%; }
+            #sort-pagecount-end { width: 35%; }
             @media (max-width: 991px) {
                 .navbar-nav.me-auto { margin-right: 0; flex-basis: 100%; margin-bottom: 10px; }
                 .SearchContainer { flex-basis: 100%; max-width: 100%; }
@@ -380,6 +389,7 @@
 
 
         let galleryId;
+
         const re_num = contentUrl.match(/.*-(\d+)\.html/);
         if (re_num && re_num[1]) {
             galleryId = re_num[1];
@@ -471,23 +481,60 @@
         });
     }
 
+    function setupCountInputEventListeners() {
+        console.log('using setupCountInputEventListeners');
+        const input_start = document.getElementById('sort-pagecount-start');
+        const input_end = document.getElementById('sort-pagecount-end');
+
+        input_start.addEventListener('input', () => {
+            const value = input_start.value.trim();
+            console.log('input_start value:', value);
+            count_start = value ? parseInt(value, 10) : null;
+        });
+
+        input_end.addEventListener('input', () => {
+            const value = input_end.value.trim();
+            console.log('input_end value:', value);
+            count_end = value ? parseInt(value, 10) : null;
+        });
+    }
+
     async function filterContents(item) {
         const h1Element = item.querySelector('h1.lillie a');
-        const url = h1Element ? h1Element.href : '#'
-        let galleryId;
+        const url = h1Element ? h1Element.href : null;
+
+        if (!url) {
+            console.log('No valid URL found in h1 element');
+            return false;
+        }
+
         const re_num = url.match(/.*-(\d+)\.html/);
-        if (re_num && re_num[1]) {
-            galleryId = re_num[1];
-        } else {
-            console.log('Failed to extract gallery ID from URL:', contentUrl);
+        const galleryId = re_num && re_num[1] ? re_num[1] : null;
+
+        if (!galleryId) {
+            console.log('Failed to extract gallery ID from URL:', url);
+            return false;
         }
-        const page_count = await getPageCount(galleryId, hitomiJsonMap)
-        if (page_count > 20) {
-            return true
-        } else {
-            console.log('Page count is less than or equal to 20:', galleryId);
+
+        const page_count = await getPageCount(galleryId, hitomiJsonMap);
+        if (page_count === null || page_count === undefined) {
+            console.log('Failed to retrieve page count for gallery:', galleryId);
+            return false;
         }
-        return false
+        if (count_start === null && count_end === null) {
+            return true;
+        }
+        if (count_start !== null && count_end !== null) {
+            if (count_start <= page_count && page_count <= count_end) {
+                return true;
+            }
+        } else if (count_start !== null && page_count >= count_start) {
+            return true;
+        } else if (count_end !== null && page_count <= count_end) {
+            return true;
+        }
+        console.log('Skipped gallery', galleryId, 'page_count:', page_count);
+        return false;
     }
 
     async function initializePage(resultJsonMap) {
@@ -501,6 +548,8 @@
         const html_container = document.querySelector('.container');
         const html_row = document.querySelector('.row');
         if (obj_data.div_NextPage) html_container.appendChild(obj_data.div_NextPage[1]);
+
+        // 新しい <select> 要素を作成
         const newSelect = document.createElement('select');
         newSelect.id = 'custom_sort';
 
@@ -514,8 +563,10 @@
         option2.value = 'value2';
         newSelect.appendChild(option2);
 
-        obj_data.div_header_sort_select[0].appendChild(newSelect);
-        if (obj_data.div_header_sort_select) html_row.appendChild(obj_data.div_header_sort_select[0]);
+        if (obj_data.div_header_sort_select) {
+            obj_data.div_header_sort_select[0].appendChild(newSelect); // <select> をその後に追加
+            html_row.appendChild(obj_data.div_header_sort_select[0]);
+        }
 
         await Promise.all(initialContents.map(async (item) => {
             const h1Element = item.querySelector('h1.lillie a');
@@ -537,6 +588,7 @@
         }));
 
         setupPopupEvents();
+        setupCountInputEventListeners();
         setupTagScrollEvents();
         setupTagPicker();
     }
@@ -573,6 +625,7 @@
                 console.log(`Page ${currentPage} loaded`);
                 hasFetched = false;
                 setupPopupEvents();
+                setupCountInputEventListeners();
                 setupTagScrollEvents();
             } catch (e) {
                 console.error('Failed to load next page:', e);
@@ -586,6 +639,8 @@
 
     let currentPage = parseInt(window.location.hash.replace('#', '') || '1', 10);
     let hasFetched = false;
+    let count_start = null;
+    let count_end = null;
 
     function getNextPageUrl() {
         console.log('using getNextPageUrl');
@@ -698,6 +753,7 @@
 
             document.body.removeChild(div_gallery_content);
             setupPopupEvents();
+            setupCountInputEventListeners();
             setupTagScrollEvents();
             hasFetched = false;
         }).catch(error => {
@@ -944,12 +1000,27 @@
 
         function extractTypeFromTable(a) {
             console.log('using extractTypeFromTable');
-            console.log(a);
             const hrefValue = a.getAttribute('href');
             console.log(hrefValue);
-            const match = hrefValue.match(/^https:\/\/hitomi\.la\/(.*)\/(.*)-all\.html$/);
-            console.log(match);
-            return match ? match[1] + ':' + encode_search_query_for_url(decodeURIComponent(match[2])) : hrefValue.match(/.* (.*)/);
+            let match;
+
+            match = hrefValue.match(/^https:\/\/hitomi\.la\/(.*)\/(.*)-all\.html$/);
+            if (match) {
+                return match[1] + ':' + encode_search_query_for_url(decodeURIComponent(match[2]));
+            }
+
+            match = hrefValue.match(/^https:\/\/hitomi\.la\/index-(.*)\.html$/);
+            if (match) {
+                return 'language:' + match[1];
+            }
+
+            match = hrefValue.match(/.* (.*)/);
+            if (match) {
+                return match[1];
+            }
+
+            console.log('No match found for href:', hrefValue);
+            return null;
         }
 
         function updateDefaultQueryUI() {
@@ -1086,5 +1157,6 @@
     setupDefaultQueryEditor();
     loadNextPageInIframe(getNextPageUrl(), resultJsonMap);
     setupPopupEvents();
+    setupCountInputEventListeners();
     setupCustomSort(resultJsonMap);
 })();
