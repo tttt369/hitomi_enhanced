@@ -20,29 +20,82 @@
 (async function() {
     'use strict';
 
+    // Global state management
+    const state = {
+        db: null,
+        defaultQuery: localStorage.getItem('hitomiDefaultQuery') || '',
+        jsonData: [],
+        currentBatchIndex: 0,
+        currentPage: parseInt(window.location.hash.replace('#', '') || '1', 10),
+        hasFetched: false,
+        isInitialized: false,
+        count_start: '0',
+        count_end: '0',
+        resultJsonMap: {},
+        hitomiJsonMap: {},
+        validClasses: ['dj', 'cg', 'acg', 'manga', 'anime', 'imageset'],
+        batchSize: 25
+    };
+
+    // Configuration
+    const CONFIG = {
+        GITHUB_BASE_URL: 'https://raw.githubusercontent.com/tttt369/hitomi_enhanced/master/urls/',
+        HITOMI_BASE_URL: 'https://hitomi.la/',
+        BATCH_SIZE: 25,
+        SCROLL_THRESHOLD: 0.9,
+        DEBOUNCE_DELAY: 100
+    };
+
+    // Utility functions
+    const debounce = (func, delay) => {
+        let timeoutId;
+        return (...args) => {
+            clearTimeout(timeoutId);
+            timeoutId = setTimeout(() => func(...args), delay);
+        };
+    };
+
+    const asyncTimeout = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    const safeJsonParse = (str) => {
+        try {
+            return JSON.parse(str);
+        } catch (e) {
+            console.error('JSON parse error:', e);
+            return null;
+        }
+    };
+
+    // Menu command registration
     GM_registerMenuCommand('Delete Default Query', deleteDefaultQuery, {
         title: 'Delete Default Query'
     });
 
     function deleteDefaultQuery() {
-        console.log('using deleteDefaultQuery');
-        defaultQuery = '';
-        localStorage.setItem('hitomiDefaultQuery', '');
+        console.log('Deleting default query');
+        state.defaultQuery = '';
+        localStorage.removeItem('hitomiDefaultQuery');
         localStorage.removeItem('hitomiDefaultPageCount');
     }
 
-    function initIndexedDB() {
-        console.log('using initIndexedDB');
+    // IndexedDB operations (async)
+    async function initIndexedDB() {
+        if (state.db) return state.db;
+
+        console.log('Initializing IndexedDB');
         return new Promise((resolve, reject) => {
             const request = indexedDB.open('HitomiEnhancedDB', 1);
 
             request.onupgradeneeded = (event) => {
                 const db = event.target.result;
-                db.createObjectStore('jsonCache');
+                if (!db.objectStoreNames.contains('jsonCache')) {
+                    db.createObjectStore('jsonCache');
+                }
             };
 
             request.onsuccess = (event) => {
-                resolve(event.target.result);
+                state.db = event.target.result;
+                resolve(state.db);
             };
 
             request.onerror = (event) => {
@@ -51,101 +104,122 @@
         });
     }
 
-    function storeJsonInIndexedDB(db, jsonData, key) {
-        console.log('using storeJsonInIndexedDB');
+    async function storeJsonInIndexedDB(jsonData, key) {
+        console.log(`Storing JSON with key: ${key}`);
+        const db = await initIndexedDB();
+
         return new Promise((resolve, reject) => {
             const transaction = db.transaction(['jsonCache'], 'readwrite');
             const store = transaction.objectStore('jsonCache');
             const request = store.put(jsonData, key);
 
-            request.onsuccess = () => resolve(console.log(`Cached JSON with key: ${key}`));
-            request.onerror = () => reject(new Error(`Failed to store JSON in IndexedDB: ${request.error}`));
+            request.onsuccess = () => {
+                console.log(`Successfully cached JSON with key: ${key}`);
+                resolve();
+            };
+            request.onerror = () => reject(new Error(`Failed to store JSON: ${request.error}`));
         });
     }
 
-    function getJsonFromIndexedDB(db, key) {
-        console.log('using getJsonFromIndexedDB');
+    async function getJsonFromIndexedDB(key) {
+        console.log(`Retrieving JSON with key: ${key}`);
+        const db = await initIndexedDB();
+
         return new Promise((resolve, reject) => {
             const transaction = db.transaction(['jsonCache'], 'readonly');
             const store = transaction.objectStore('jsonCache');
             const request = store.get(key);
 
             request.onsuccess = () => resolve(request.result || null);
-            request.onerror = () => reject(new Error(`Failed to retrieve JSON from IndexedDB: ${request.error}`));
+            request.onerror = () => reject(new Error(`Failed to retrieve JSON: ${request.error}`));
         });
     }
 
-    async function getCachedJson(hitomi_data = null) {
-        console.log('using getCachedJson');
-        try {
-            const db = await initIndexedDB();
-            const isHitomiData = hitomi_data !== null && hitomi_data !== undefined;
-            const url = isHitomiData
-                ? 'https://raw.githubusercontent.com/tttt369/hitomi_enhanced/master/urls/hitomi_data.json'
-                : 'https://raw.githubusercontent.com/tttt369/hitomi_enhanced/master/urls/result.json';
-            const cacheKey = isHitomiData ? 'hitomi_data_json' : 'result_json';
-
-            let jsonData = await getJsonFromIndexedDB(db, cacheKey);
-
-            if (!jsonData) {
-                jsonData = await new Promise((resolve, reject) => {
+    // Enhanced JSON fetching with retry logic
+    async function fetchJsonWithRetry(url, retries = 3) {
+        for (let i = 0; i < retries; i++) {
+            try {
+                return await new Promise((resolve, reject) => {
                     GM_xmlhttpRequest({
                         method: 'GET',
                         url: url,
+                        timeout: 10000,
                         onload: (response) => {
-                            try {
-                                const data = JSON.parse(response.responseText);
-                                resolve(data);
-                            } catch (e) {
-                                reject(new Error('Failed to parse JSON: ' + e.message));
+                            if (response.status === 200) {
+                                const data = safeJsonParse(response.responseText);
+                                if (data) {
+                                    resolve(data);
+                                } else {
+                                    reject(new Error('Invalid JSON response'));
+                                }
+                            } else {
+                                reject(new Error(`HTTP ${response.status}: ${response.statusText}`));
                             }
                         },
-                        onerror: () => {
-                            reject(new Error(`Failed to fetch JSON from ${url}`));
-                        }
+                        onerror: () => reject(new Error(`Network error for ${url}`)),
+                        ontimeout: () => reject(new Error(`Timeout for ${url}`))
                     });
                 });
-                await storeJsonInIndexedDB(db, jsonData, cacheKey);
+            } catch (error) {
+                console.warn(`Attempt ${i + 1} failed for ${url}:`, error.message);
+                if (i === retries - 1) throw error;
+                await asyncTimeout(1000 * (i + 1)); // Progressive delay
+            }
+        }
+    }
+
+    async function getCachedJson(isHitomiData = false) {
+        console.log(`Getting cached JSON (hitomi_data: ${isHitomiData})`);
+
+        try {
+            const url = isHitomiData
+                ? `${CONFIG.GITHUB_BASE_URL}hitomi_data.json`
+                : `${CONFIG.GITHUB_BASE_URL}result.json`;
+            const cacheKey = isHitomiData ? 'hitomi_data_json' : 'result_json';
+
+            let jsonData = await getJsonFromIndexedDB(cacheKey);
+
+            if (!jsonData) {
+                console.log(`Cache miss for ${cacheKey}, fetching from network`);
+                jsonData = await fetchJsonWithRetry(url);
+                await storeJsonInIndexedDB(jsonData, cacheKey);
+            } else {
+                console.log(`Cache hit for ${cacheKey}`);
             }
 
             if (typeof jsonData === 'string') {
-                try {
-                    jsonData = JSON.parse(jsonData);
-                } catch (e) {
-                    console.error('Failed to parse stored JSON:', e);
-                    return {};
-                }
+                jsonData = safeJsonParse(jsonData);
+                if (!jsonData) return {};
             }
 
             if (isHitomiData) {
-                if (typeof jsonData !== 'object' || jsonData === null) {
-                    console.error('jsonData is not a valid object:', jsonData);
-                    return {};
-                }
-                return jsonData;
+                return jsonData || {};
             }
 
             if (!Array.isArray(jsonData)) {
-                console.error('jsonData is not an array:', jsonData);
+                console.error('Result JSON is not an array:', jsonData);
                 return {};
             }
 
-            const resultJsonMap = {};
+            // Convert array to map for O(1) lookups
+            const resultMap = {};
             jsonData.forEach((item, index) => {
-                resultJsonMap[index] = item;
+                if (item && item.id) {
+                    resultMap[item.id] = item;
+                } else {
+                    resultMap[index] = item;
+                }
             });
 
-            return resultJsonMap;
+            return resultMap;
         } catch (error) {
-            console.error(error);
+            console.error('Error fetching cached JSON:', error);
             return {};
         }
     }
 
-    const resultJsonMap = await getCachedJson();
-    const hitomiJsonMap = await getCachedJson(true);
-
-    const html = `
+    // HTML and CSS content
+    const HTML_CONTENT = `
         <!DOCTYPE html>
         <html data-bs-theme="dark" lang="ja">
             <head></head>
@@ -208,7 +282,7 @@
         </html>
     `;
 
-    const head = `
+    const CSS_CONTENT = `
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -260,6 +334,7 @@
             .page-count-container { display: flex; margin-top: 10px; }
             #sort-pagecount-start { flex: 1; }
             #sort-pagecount-end { flex: 2; }
+            .loading { opacity: 0.7; pointer-events: none; }
             @media (max-width: 991px) {
                 .navbar-nav.me-auto { margin-right: 0; flex-basis: 100%; margin-bottom: 10px; }
                 .SearchContainer { flex-basis: 100%; max-width: 100%; }
@@ -279,537 +354,664 @@
         </style>
     `;
 
-    const obj_data = {
-        div_NextPage: null,
-        div_header_sort_select: null
-    };
-
-    let jsonData = [];
-    let currentBatchIndex = 0;
-    const batchSize = 25;
-    let count_start = '0';
-    let count_end = '0';
-
-    function loadPageCountFromStorage() {
-        console.log('using loadPageCountFromStorage');
+    // Storage management
+    async function loadPageCountFromStorage() {
+        console.log('Loading page count from storage');
         const savedPageCount = localStorage.getItem('hitomiDefaultPageCount');
         if (savedPageCount) {
-            const pageCountArray = JSON.parse(savedPageCount);
+            try {
+                const pageCountArray = JSON.parse(savedPageCount);
+                const start = pageCountArray[0] || '0';
+                const end = pageCountArray[1] || '0';
 
-            const start = pageCountArray[0] || '0';
-            const end = pageCountArray[1] || '0';
+                state.count_start = start;
+                state.count_end = end;
 
-            count_start = start;
-            count_end = end;
+                const startInput = document.getElementById('sort-pagecount-start');
+                const endInput = document.getElementById('sort-pagecount-end');
 
-            document.getElementById('sort-pagecount-start').value = start || '0';
-            document.getElementById('sort-pagecount-end').value = end || '0';
+                if (startInput) startInput.value = start;
+                if (endInput) endInput.value = end;
+            } catch (e) {
+                console.error('Error parsing page count from storage:', e);
+            }
         }
     }
 
-    // ページカウントをローカルストレージに保存
-    function savePageCountToStorage() {
-        console.log('using savePageCountToStorage');
-        const start = document.getElementById('sort-pagecount-start').value.trim();
-        const end = document.getElementById('sort-pagecount-end').value.trim();
-        const pageCountArray = [start || '', end || ''];
+    async function savePageCountToStorage() {
+        console.log('Saving page count to storage');
+        const startInput = document.getElementById('sort-pagecount-start');
+        const endInput = document.getElementById('sort-pagecount-end');
+
+        const start = startInput?.value.trim() || '';
+        const end = endInput?.value.trim() || '';
+        const pageCountArray = [start, end];
 
         localStorage.setItem('hitomiDefaultPageCount', JSON.stringify(pageCountArray));
         console.log('Page count saved:', pageCountArray);
     }
 
-    async function observeGalleryContents(targetDoc, isInitialPage = false) {
-        console.log('using observeGalleryContents');
-        return new Promise((resolve) => {
-            const observer = new MutationObserver(() => {
-                const div_gallerycontents = targetDoc.querySelectorAll('div.gallery-content div');
-                const div_page_containers = $('div.page-container');
-                const div_header_sort_select = $('div.header-sort-select');
+    // Content observation with async/await
+    async function observeGalleryContents(targetDoc, isInitialPage = false, timeout = 10000) {
+        console.log('Observing gallery contents');
 
-                if (div_page_containers.length > 0) obj_data.div_NextPage = div_page_containers;
-                if (div_header_sort_select.length > 0) obj_data.div_header_sort_select = div_header_sort_select;
-                if (div_gallerycontents.length > 2) {
+        return new Promise((resolve, reject) => {
+            const timeoutId = setTimeout(() => {
+                observer.disconnect();
+                reject(new Error('Gallery content observation timeout'));
+            }, timeout);
+
+            const observer = new MutationObserver(() => {
+                try {
+                    const divGalleryContents = targetDoc.querySelectorAll('div.gallery-content div');
+                    const divPageContainers = $(targetDoc).find('div.page-container');
+                    const divHeaderSortSelect = $(targetDoc).find('div.header-sort-select');
+
+                    if (divPageContainers.length > 0) {
+                        // Store reference for later use
+                        state.divNextPage = divPageContainers;
+                    }
+                    if (divHeaderSortSelect.length > 0) {
+                        state.divHeaderSortSelect = divHeaderSortSelect;
+                    }
+
+                    if (divGalleryContents.length > 2) {
+                        clearTimeout(timeoutId);
+                        observer.disconnect();
+
+                        const filteredContents = Array.from(divGalleryContents).filter(element =>
+                            Array.from(element.classList).some(cls => state.validClasses.includes(cls))
+                        ).map(element => isInitialPage ? $(element).get()[0] : element.cloneNode(true));
+
+                        resolve(filteredContents);
+                    }
+                } catch (error) {
+                    clearTimeout(timeoutId);
                     observer.disconnect();
-                    const filteredContents = Array.from(div_gallerycontents).filter(element =>
-                        Array.from(element.classList).some(cls => validClasses.includes(cls))
-                    ).map(element => isInitialPage ? $(element).get()[0] : element.cloneNode(true));
-                    resolve(filteredContents);
+                    reject(error);
                 }
             });
+
             observer.observe(targetDoc.body, { childList: true, subtree: true });
         });
     }
 
-    async function getPageCount(id, json) {
-        console.log('using getPageCount');
-        const item = Object.keys(json).find(key => key == id);
-        if (item) {
-            console.log('Found in cache', json[item].pages);
-            return json[item].pages;
+    // Async page count retrieval with caching
+    async function getPageCount(id) {
+        console.log(`Getting page count for ID: ${id}`);
+
+        // Check cache first
+        if (state.hitomiJsonMap[id]?.pages) {
+            console.log('Found in cache:', state.hitomiJsonMap[id].pages);
+            return state.hitomiJsonMap[id].pages;
         }
 
+        // Fallback to script loading
         return new Promise((resolve) => {
-            $.getScript(`https://ltn.gold-usergeneratedcontent.net/galleries/${id}.js`)
-                .done(() => {
+            const script = document.createElement('script');
+            script.src = `https://ltn.gold-usergeneratedcontent.net/galleries/${id}.js`;
+            script.onload = () => {
+                try {
                     if (typeof galleryinfo !== 'undefined' && galleryinfo.files) {
-                        const page_count = galleryinfo.files.length;
-                        resolve(page_count);
+                        const pageCount = galleryinfo.files.length;
+                        // Cache the result
+                        if (!state.hitomiJsonMap[id]) {
+                            state.hitomiJsonMap[id] = {};
+                        }
+                        state.hitomiJsonMap[id].pages = pageCount;
+                        resolve(pageCount);
                     } else {
                         console.error('Gallery info not found for ID:', id);
                         resolve('N/A');
                     }
-                })
-                .fail(() => {
-                    console.error('Failed to load gallery script:', id);
+                } catch (error) {
+                    console.error('Error processing gallery info:', error);
                     resolve('N/A');
-                });
+                } finally {
+                    document.head.removeChild(script);
+                }
+            };
+            script.onerror = () => {
+                console.error('Failed to load gallery script:', id);
+                document.head.removeChild(script);
+                resolve('N/A');
+            };
+            document.head.appendChild(script);
         });
     }
 
-    async function generateCard(contentUrl, title, imgPicture, Tags, seriesList, language, type, ArtistList, stars = 0, resultJsonMap) {
-        console.log('using generateCard');
-        const div_col = $('<div class="col"></div>');
-        $('.row').append(div_col);
-        const div_card = $('<div class="card h-100"></div>');
-        div_col.append(div_card);
+    // Enhanced card generation with better async handling
+    async function generateCard(contentUrl, title, imgPicture, tags, seriesList, language, type, artistList, stars = 0) {
+        console.log('Generating card for:', title);
 
-        const ImageContainer = $('<div class="ImageContainer"></div>');
-        div_card.append(ImageContainer);
-        const a_ImgUrl = $('<a></a>').attr('href', contentUrl);
-        ImageContainer.append(a_ImgUrl);
-        const img_top = $(imgPicture).addClass('card-img-top');
-        a_ImgUrl.append(img_top);
+        try {
+            const divCol = $('<div class="col"></div>');
+            $('.row').append(divCol);
+            const divCard = $('<div class="card h-100"></div>');
+            divCol.append(divCard);
 
-        const div_card_body = $('<div class="card-body"></div>');
-        div_card.append(div_card_body);
-        const TableContainer = $('<div class="TableContainer"></div>');
-        div_card_body.append(TableContainer);
+            // Image container
+            const imageContainer = $('<div class="ImageContainer"></div>');
+            divCard.append(imageContainer);
+            const aImgUrl = $('<a></a>').attr('href', contentUrl);
+            imageContainer.append(aImgUrl);
+            const imgTop = $(imgPicture).addClass('card-img-top');
+            aImgUrl.append(imgTop);
 
-        const a_card_title = $('<a class="card-title"></a>').attr('href', contentUrl).text(title);
-        TableContainer.append(a_card_title);
+            // Card body
+            const divCardBody = $('<div class="card-body"></div>');
+            divCard.append(divCardBody);
+            const tableContainer = $('<div class="TableContainer"></div>');
+            divCardBody.append(tableContainer);
 
-        const table = $('<table><tbody></tbody></table>');
-        TableContainer.append(table);
-        const tbody = table.find('tbody');
+            const aCardTitle = $('<a class="card-title"></a>').attr('href', contentUrl).text(title);
+            tableContainer.append(aCardTitle);
 
-        const appendListRow = (type, listOrItem, urlPrefix, container, defaultText = 'N/A') => {
-            const isList = Array.isArray(listOrItem) || listOrItem instanceof NodeList;
-            const list = isList ? Array.from(listOrItem) : [listOrItem];
-            const text = list.length && list[0].textContent ? list[0].textContent : defaultText;
-            const raw_url = list.length && list[0].href ? list[0].href : "#";
-            const type_content = raw_url.match(/^https:\/\/hitomi\.la\/.*\/(.*)-all\.html$/) || raw_url.match(/^https:\/\/hitomi\.la\/index-(.*)\.html$/);
-            const aTag = $(`<a>${text}</a>`);
+            const table = $('<table><tbody></tbody></table>');
+            tableContainer.append(table);
+            const tbody = table.find('tbody');
 
-            tbody.append(`<tr><td class="type">${type}</td><td class="colon">:</td><td></td></tr>`);
-            tbody.find('tr:last td:last').append(aTag);
+            // Helper function for rows
+            const appendListRow = (type, listOrItem, container, defaultText = 'N/A') => {
+                const isList = Array.isArray(listOrItem) || listOrItem instanceof NodeList;
+                const list = isList ? Array.from(listOrItem) : [listOrItem];
+                const text = list.length && list[0].textContent ? list[0].textContent : defaultText;
+                const rawUrl = list.length && list[0].href ? list[0].href : "#";
+                const typeContent = rawUrl.match(/^https:\/\/hitomi\.la\/.*\/(.*)-all\.html$/) || rawUrl.match(/^https:\/\/hitomi\.la\/index-(.*)\.html$/);
+                const aTag = $(`<a>${text}</a>`);
 
-            if (list.length && list[0].textContent) {
-                aTag.attr('href', defaultQuery === '' ? raw_url : `${default_url} ${type}:${type_content[1]}`);
-            }
+                tbody.append(`<tr><td class="type">${type}</td><td class="colon">:</td><td></td></tr>`);
+                tbody.find('tr:last td:last').append(aTag);
 
-            if (isList && list.length > 1) {
-                const popup = $(`<div class="popup"><i class="bi bi-info-square"></i><span class="popuptext">${list.slice(1).map(s => `${type}: ${s.textContent}`).join('<br>')}</span></div>`);
-                container.append(popup);
-            }
-        };
-
-        appendListRow('language', language, ' language:', div_card_body);
-        appendListRow('type', type, ' type:', div_card_body, 'Unknown');
-        appendListRow('artist', ArtistList, ' artist:', div_card_body);
-        appendListRow('series', seriesList, ' series:', div_card_body);
-
-        let galleryId;
-        const re_num = contentUrl.match(/.*-(\d+)\.html/);
-        if (re_num && re_num[1]) {
-            galleryId = re_num[1];
-        } else {
-            console.log('Failed to extract gallery ID from URL:', contentUrl);
-        }
-
-        const div_numstar_container = $('<div class="numstar-container"></div>');
-        div_card_body.append(div_numstar_container);
-        const h6_pagenum = $('<h6 class="badge bg-secondary">Loading...</h6>');
-        const page_count = await getPageCount(galleryId, hitomiJsonMap);
-        h6_pagenum.text(`${page_count}p`);
-        div_numstar_container.append(h6_pagenum);
-
-        const h6_star = $('<h6 class="star"></h6>');
-        const json_items = Object.values(resultJsonMap).find(item => item.id === galleryId);
-        if (json_items) {
-            const a_StarHref = $("<a></a>")
-            a_StarHref.attr("href", json_items.dmm_url);
-            const finalStars = json_items.stars
-            const filledStars = Math.floor(finalStars / 10);
-            const NumStars = json_items.num_stars
-            const hasHalfStar = finalStars % 10 >= 5 ? 1 : 0;
-
-            if (finalStars > 0) {
-                for (let i = 0; i < filledStars; i++) {
-                    const i_fillstar = $('<i class="bi bi-star-fill"></i>');
-                    h6_star.append(i_fillstar);
+                if (list.length && list[0].textContent) {
+                    const defaultUrl = getDefaultUrl();
+                    aTag.attr('href', state.defaultQuery === '' ? rawUrl : `${defaultUrl} ${type}:${typeContent[1]}`);
                 }
 
-                if (hasHalfStar) {
-                    const i_halfstar = $('<i class="bi bi-star-half"></i>');
-                    h6_star.append(i_halfstar);
+                if (isList && list.length > 1) {
+                    const popup = $(`<div class="popup"><i class="bi bi-info-square"></i><span class="popuptext">${list.slice(1).map(s => `${type}: ${s.textContent}`).join('<br>')}</span></div>`);
+                    container.append(popup);
                 }
-                h6_star.append(NumStars);
-                a_StarHref.append(h6_star)
-            }
-            div_numstar_container.append(a_StarHref)
-        }
+            };
 
-        const div_tags_container = $('<div class="tags-container"></div>');
-        div_card_body.append(div_tags_container);
-        if (Tags.length === 0) {
-            div_tags_container.append('<span class="badge bg-primary"></span>');
-        } else {
-            Tags.forEach(tag => {
-                const clone = tag.cloneNode(true);
-                if (clone.textContent === '...') return;
-                if (clone.href) {
-                    const TagUrl = clone.href.match(/\/tag\/(.*)-all.html/);
-                    if (TagUrl && TagUrl[1]) {
-                        clone.className = 'badge bg-primary';
-                        clone.href = defaultQuery === '' ? clone.href : default_url + " " + encode_search_query_for_url(decodeURIComponent(TagUrl[1]));
-                        div_tags_container.append(clone);
-                    }
-                }
+            appendListRow('language', language, divCardBody);
+            appendListRow('type', type, divCardBody, 'Unknown');
+            appendListRow('artist', artistList, divCardBody);
+            appendListRow('series', seriesList, divCardBody);
+
+            // Extract gallery ID
+            const reNum = contentUrl.match(/.*-(\d+)\.html/);
+            const galleryId = reNum?.[1];
+
+            if (!galleryId) {
+                console.log('Failed to extract gallery ID from URL:', contentUrl);
+                return;
+            }
+
+            // Number and star container
+            const divNumstarContainer = $('<div class="numstar-container"></div>');
+            divCardBody.append(divNumstarContainer);
+            const h6Pagenum = $('<h6 class="badge bg-secondary">Loading...</h6>');
+            divNumstarContainer.append(h6Pagenum);
+
+            // Get page count asynchronously
+            getPageCount(galleryId).then(pageCount => {
+                h6Pagenum.text(`${pageCount}p`);
             });
+
+            // Star rating
+            const h6Star = $('<h6 class="star"></h6>');
+            const jsonItem = state.resultJsonMap[galleryId];
+
+            if (jsonItem) {
+                const aStarHref = $("<a></a>").attr("href", jsonItem.dmm_url);
+                const finalStars = jsonItem.stars || 0;
+                const filledStars = Math.floor(finalStars / 10);
+                const numStars = jsonItem.num_stars;
+                const hasHalfStar = finalStars % 10 >= 5 ? 1 : 0;
+
+                if (finalStars > 0) {
+                    for (let i = 0; i < filledStars; i++) {
+                        h6Star.append('<i class="bi bi-star-fill"></i>');
+                    }
+                    if (hasHalfStar) {
+                        h6Star.append('<i class="bi bi-star-half"></i>');
+                    }
+                    h6Star.append(numStars);
+                    aStarHref.append(h6Star);
+                }
+                divNumstarContainer.append(aStarHref);
+            }
+
+            // Tags container
+            const divTagsContainer = $('<div class="tags-container"></div>');
+            divCardBody.append(divTagsContainer);
+
+            if (tags.length === 0) {
+                divTagsContainer.append('<span class="badge bg-primary"></span>');
+            } else {
+                Array.from(tags).forEach(tag => {
+                    const clone = tag.cloneNode(true);
+                    if (clone.textContent === '...') return;
+
+                    if (clone.href) {
+                        const tagUrl = clone.href.match(/\/tag\/(.*)-all.html/);
+                        if (tagUrl?.[1]) {
+                            clone.className = 'badge bg-primary';
+                            const defaultUrl = getDefaultUrl();
+                            clone.href = state.defaultQuery === '' ? clone.href :
+                                `${defaultUrl} ${encode_search_query_for_url(decodeURIComponent(tagUrl[1]))}`;
+                            divTagsContainer.append(clone);
+                        }
+                    }
+                });
+            }
+        } catch (error) {
+            console.error('Error generating card:', error);
         }
     }
 
+    // Utility function to get default URL
+    function getDefaultUrl() {
+        return state.defaultQuery ? `https://hitomi.la/search.html?${encodeURI(state.defaultQuery)}` : 'https://hitomi.la/';
+    }
+
+    // Enhanced event setup functions
     function setupTagScrollEvents() {
-        console.log('using setupTagScrollEvents');
-        const divDefaultQueryBadges = document.getElementsByClassName('default-query-badges');
-        for (const Badge of divDefaultQueryBadges) {
-            Badge.addEventListener('wheel', (event) => {
-                event.preventDefault();
-                Badge.scrollLeft += event.deltaY;
+        console.log('Setting up tag scroll events');
+        const addWheelListener = (selector) => {
+            const elements = document.getElementsByClassName(selector);
+            Array.from(elements).forEach(element => {
+                element.addEventListener('wheel', (event) => {
+                    event.preventDefault();
+                    element.scrollLeft += event.deltaY;
+                }, { passive: false });
             });
-        }
-        const divTagsContainers = document.getElementsByClassName('tags-container');
-        for (const container of divTagsContainers) {
-            container.addEventListener('wheel', (event) => {
-                event.preventDefault();
-                container.scrollLeft += event.deltaY;
-            });
-        }
+        };
+
+        addWheelListener('default-query-badges');
+        addWheelListener('tags-container');
     }
 
     function setupPopupEvents() {
-        console.log('using setupPopupEvents');
+        console.log('Setting up popup events');
         document.body.addEventListener('click', (e) => {
             const popup = e.target.closest('.popup');
             if (popup) {
                 e.preventDefault();
                 const popuptext = popup.querySelector('.popuptext');
-                if (popuptext) popuptext.classList.toggle('show');
+                if (popuptext) {
+                    popuptext.classList.toggle('show');
+                }
             }
         });
     }
 
-    function setupCountInputEventListeners() {
-        console.log('using setupCountInputEventListeners');
-        const input_start = document.getElementById('sort-pagecount-start');
-        const input_end = document.getElementById('sort-pagecount-end');
+    async function setupCountInputEventListeners() {
+        console.log('Setting up count input event listeners');
+        await loadPageCountFromStorage();
 
-        loadPageCountFromStorage();
+        const inputStart = document.getElementById('sort-pagecount-start');
+        const inputEnd = document.getElementById('sort-pagecount-end');
 
-        input_start.addEventListener('input', () => {
-            const value = input_start.value.trim();
-            console.log('input_start value:', value);
-            count_start = value ? parseInt(value, 10) : null;
-        });
+        if (inputStart) {
+            inputStart.addEventListener('input', debounce(() => {
+                const value = inputStart.value.trim();
+                state.count_start = value || '0';
+                savePageCountToStorage();
+            }, CONFIG.DEBOUNCE_DELAY));
+        }
 
-        input_end.addEventListener('input', () => {
-            const value = input_end.value.trim();
-            console.log('input_end value:', value);
-            count_end = value ? parseInt(value, 10) : null;
-        });
+        if (inputEnd) {
+            inputEnd.addEventListener('input', debounce(() => {
+                const value = inputEnd.value.trim();
+                state.count_end = value || '0';
+                savePageCountToStorage();
+            }, CONFIG.DEBOUNCE_DELAY));
+        }
     }
 
+    // Enhanced filtering with async page count
     async function filterContents(item) {
-        loadPageCountFromStorage();
-        console.log("using filterContents");
-        console.log(count_start);
-        console.log(count_end);
+        console.log("Filtering contents");
+        await loadPageCountFromStorage();
+
         const h1Element = item.querySelector('h1.lillie a');
-        const url = h1Element ? h1Element.href : null;
+        const url = h1Element?.href;
 
         if (!url) {
             console.log('No valid URL found in h1 element');
             return false;
         }
 
-        const re_num = url.match(/.*-(\d+)\.html/);
-        const galleryId = re_num && re_num[1] ? re_num[1] : null;
+        const reNum = url.match(/.*-(\d+)\.html/);
+        const galleryId = reNum?.[1];
 
         if (!galleryId) {
             console.log('Failed to extract gallery ID from URL:', url);
             return false;
         }
 
-        const page_count = await getPageCount(galleryId, hitomiJsonMap);
-        if (page_count === null || page_count === undefined) {
-            console.log('Failed to retrieve page count for gallery:', galleryId);
-            return false;
-        }
-        if (count_start === '0' && count_end === '0') {
-            console.log('1')
-            return true;
-        }
-        if (count_start !== '0' && count_end !== '0') {
-            if (count_start <= page_count && page_count <= count_end) {
-                console.log('2')
+        try {
+            const pageCount = await getPageCount(galleryId);
+            if (pageCount === null || pageCount === undefined || pageCount === 'N/A') {
+                console.log('Failed to retrieve page count for gallery:', galleryId);
+                return false;
+            }
+
+            const numPageCount = parseInt(pageCount, 10);
+            const startCount = parseInt(state.count_start, 10) || 0;
+            const endCount = parseInt(state.count_end, 10) || 0;
+
+            if (startCount === 0 && endCount === 0) {
                 return true;
             }
-        } else if (count_start !== '0' && page_count >= count_start) {
-            console.log('3')
+
+            if (startCount > 0 && endCount > 0) {
+                return numPageCount >= startCount && numPageCount <= endCount;
+            } else if (startCount > 0) {
+                return numPageCount >= startCount;
+            } else if (endCount > 0) {
+                return numPageCount <= endCount;
+            }
+
             return true;
-        } else if (count_end !== '0' && page_count <= count_end) {
-            console.log('4')
-            return true;
+        } catch (error) {
+            console.error('Error filtering content:', error);
+            return false;
         }
-        console.log('Skipped gallery', galleryId, 'page_count:', page_count);
-        return false;
     }
 
-    async function initializePage(resultJsonMap) {
-        console.log('using initializePage');
-        let initialContents = await observeGalleryContents(document, true);
+    // Enhanced initialization with better error handling
+    async function initializePage() {
+        console.log('Initializing page');
 
-        document.documentElement.innerHTML = html;
-        document.head.insertAdjacentHTML('beforeend', head);
-        document.querySelector('html').setAttribute('data-bs-theme', 'dark');
+        try {
+            const initialContents = await observeGalleryContents(document, true);
 
-        const html_container = document.querySelector('.container');
-        const html_row = document.querySelector('.row');
-        if (obj_data.div_NextPage) html_container.appendChild(obj_data.div_NextPage[1]);
+            document.documentElement.innerHTML = HTML_CONTENT;
+            document.head.insertAdjacentHTML('beforeend', CSS_CONTENT);
+            document.querySelector('html').setAttribute('data-bs-theme', 'dark');
 
-        const newSelect = document.createElement('select');
-        newSelect.id = 'custom_sort';
+            const htmlContainer = document.querySelector('.container');
+            const htmlRow = document.querySelector('.row');
 
-        const option1 = document.createElement('option');
-        option1.text = '-';
-        option1.value = 'value1';
-        newSelect.appendChild(option1);
+            if (state.divNextPage) {
+                htmlContainer.appendChild(state.divNextPage[1]);
+            }
 
-        const option2 = document.createElement('option');
-        option2.text = 'star sort';
-        option2.value = 'value2';
-        newSelect.appendChild(option2);
+            // Create custom sort dropdown
+            const newSelect = document.createElement('select');
+            newSelect.id = 'custom_sort';
+            newSelect.innerHTML = `
+                <option value="value1">-</option>
+                <option value="value2">star sort</option>
+            `;
 
-        if (obj_data.div_header_sort_select) {
-            obj_data.div_header_sort_select[0].appendChild(newSelect);
-            html_row.appendChild(obj_data.div_header_sort_select[0]);
-        }
+            if (state.divHeaderSortSelect) {
+                state.divHeaderSortSelect[0].appendChild(newSelect);
+                htmlRow.appendChild(state.divHeaderSortSelect[0]);
+            }
 
-        await Promise.all(initialContents.map(async (item) => {
-            const h1Element = item.querySelector('h1.lillie a');
-            const bool_result = await filterContents(item);
-            if (bool_result) {
-                generateCard(
-                    h1Element ? h1Element.href : '#',
-                    h1Element ? h1Element.textContent : 'Unknown',
+            // Process initial contents with concurrent filtering and card generation
+            const filteredContents = [];
+            for (const item of initialContents) {
+                if (await filterContents(item)) {
+                    filteredContents.push(item);
+                }
+            }
+
+            // Generate cards concurrently in batches
+            const cardPromises = filteredContents.map(async (item) => {
+                const h1Element = item.querySelector('h1.lillie a');
+                return generateCard(
+                    h1Element?.href || '#',
+                    h1Element?.textContent || 'Unknown',
                     item.querySelector('div[class$="-img1"] picture'),
                     item.querySelectorAll('td.relatedtags ul li a'),
                     item.querySelectorAll('td.series-list ul li a'),
                     item.querySelector('table.dj-desc tbody tr:nth-child(3) td a') || { textContent: 'Unknown', href: '#' },
                     item.querySelector('table.dj-desc tbody tr:nth-child(2) td a') || { textContent: 'Unknown', href: '#' },
                     item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' },
-                    0,
-                    resultJsonMap
+                    0
                 );
-            }
-        }));
+            });
 
-        setupPopupEvents();
-        setupCountInputEventListeners();
-        setupTagScrollEvents();
-        setupTagPicker();
+            await Promise.all(cardPromises);
+
+            setupPopupEvents();
+            await setupCountInputEventListeners();
+            setupTagScrollEvents();
+            setupTagPicker();
+
+            state.isInitialized = true;
+            console.log('Page initialization completed');
+
+        } catch (error) {
+            console.error('Error during page initialization:', error);
+        }
     }
 
-    function loadNextPageInIframe(url, resultJsonMap) {
-        console.log('using loadNextPageInIframe');
-        const iframe = document.createElement('iframe');
-        iframe.style.cssText = 'position: fixed; top: 0; left: 0; width: 1px; height: 1px; border: 0; visibility: hidden;';
-        iframe.sandbox = 'allow-same-origin allow-scripts';
-        iframe.src = url;
+    // Enhanced iframe loading with better error handling
+    async function loadNextPageInIframe(url) {
+        console.log('Loading next page in iframe:', url);
 
-        iframe.onload = async () => {
-            try {
-                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-                const nextContents = await observeGalleryContents(iframeDoc);
-                await Promise.all(nextContents.map(async (item) => {
-                    const h1Element = item.querySelector('h1.lillie a');
-                    const bool_result = await filterContents(item);
-                    if (bool_result) {
-                        generateCard(
-                            h1Element ? h1Element.href : '#',
-                            h1Element ? h1Element.textContent : 'Unknown',
+        return new Promise((resolve, reject) => {
+            const iframe = document.createElement('iframe');
+            iframe.style.cssText = 'position: fixed; top: 0; left: 0; width: 1px; height: 1px; border: 0; visibility: hidden;';
+            iframe.sandbox = 'allow-same-origin allow-scripts';
+            iframe.src = url;
+
+            const timeout = setTimeout(() => {
+                document.body.removeChild(iframe);
+                reject(new Error('Iframe loading timeout'));
+            }, 15000);
+
+            iframe.onload = async () => {
+                try {
+                    clearTimeout(timeout);
+                    const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                    const nextContents = await observeGalleryContents(iframeDoc);
+
+                    const filteredContents = [];
+                    for (const item of nextContents) {
+                        if (await filterContents(item)) {
+                            filteredContents.push(item);
+                        }
+                    }
+
+                    const cardPromises = filteredContents.map(async (item) => {
+                        const h1Element = item.querySelector('h1.lillie a');
+                        return generateCard(
+                            h1Element?.href || '#',
+                            h1Element?.textContent || 'Unknown',
                             item.querySelector('div[class$="-img1"] picture'),
                             item.querySelectorAll('td.relatedtags ul li a'),
                             item.querySelectorAll('td.series-list ul li a'),
                             item.querySelector('table.dj-desc tbody tr:nth-child(3) td a') || { textContent: 'Unknown', href: '#' },
                             item.querySelector('table.dj-desc tbody tr:nth-child(2) td a') || { textContent: 'Unknown', href: '#' },
                             item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' },
-                            0,
-                            resultJsonMap
+                            0
                         );
-                    }
-                }));
-                console.log(`Page ${currentPage} loaded`);
-                hasFetched = false;
-                setupPopupEvents();
-                setupCountInputEventListeners();
-                setupTagScrollEvents();
-            } catch (e) {
-                console.error('Failed to load next page:', e);
-            } finally {
+                    });
+
+                    await Promise.all(cardPromises);
+
+                    console.log(`Page ${state.currentPage} loaded successfully`);
+                    state.hasFetched = false;
+                    setupPopupEvents();
+                    await setupCountInputEventListeners();
+                    setupTagScrollEvents();
+
+                    resolve();
+                } catch (error) {
+                    console.error('Failed to load next page:', error);
+                    reject(error);
+                } finally {
+                    document.body.removeChild(iframe);
+                }
+            };
+
+            iframe.onerror = () => {
+                clearTimeout(timeout);
                 document.body.removeChild(iframe);
-            }
-        };
+                reject(new Error('Iframe loading failed'));
+            };
 
-        document.body.appendChild(iframe);
-    }
-
-    let currentPage = parseInt(window.location.hash.replace('#', '') || '1', 10);
-    let hasFetched = false;
-
-    function getNextPageUrl() {
-        console.log('using getNextPageUrl');
-        const baseUrl = window.location.href.split('#')[0];
-        const re_url = /\.html$/;
-        currentPage += 1;
-        if (window.location.href.match(re_url) || baseUrl === 'https://hitomi.la/') {
-            const urlParts = baseUrl.split('page=');
-            return `${urlParts[0]}?page=${currentPage}`;
-        } else {
-            return `${baseUrl}#${currentPage}`;
-        }
-    }
-
-    async function setupCustomSort(resultJsonMap) {
-        console.log('using setupCustomSort');
-        const newSelect = document.getElementById('custom_sort');
-        newSelect.addEventListener('change', (e) => {
-            if (e.target.value === 'value2') {
-                currentBatchIndex = 0;
-                jsonData = [];
-                $('.row').empty();
-
-                jsonData = Object.values(resultJsonMap).sort((a, b) => (b.stars || 0) - (a.stars || 0));
-                processBatch(resultJsonMap);
-            }
+            document.body.appendChild(iframe);
         });
     }
 
-    let defaultQuery = localStorage.getItem('hitomiDefaultQuery') || '';
-    const validClasses = ['dj', 'cg', 'acg', 'manga', 'anime', 'imageset'];
+    // Enhanced URL generation
+    function getNextPageUrl() {
+        console.log('Getting next page URL');
+        const baseUrl = window.location.href.split('#')[0];
+        const reUrl = /\.html$/;
+        state.currentPage += 1;
 
-    let default_url = defaultQuery ? `https://hitomi.la/search.html?${encodeURI(defaultQuery)}` : 'https://hitomi.la/';
-    if (defaultQuery && window.location.href === 'https://hitomi.la/') {
-        window.location.href = default_url;
-        return;
+        if (window.location.href.match(reUrl) || baseUrl === 'https://hitomi.la/') {
+            const urlParts = baseUrl.split('page=');
+            return `${urlParts[0]}?page=${state.currentPage}`;
+        } else {
+            return `${baseUrl}#${state.currentPage}`;
+        }
     }
 
-    async function processBatch(resultJsonMap) {
-        console.log('using processBatch');
-        if (currentBatchIndex >= jsonData.length) {
+    // Enhanced custom sort with better performance
+    async function setupCustomSort() {
+        console.log('Setting up custom sort');
+        const newSelect = document.getElementById('custom_sort');
+
+        if (newSelect) {
+            newSelect.addEventListener('change', async (e) => {
+                if (e.target.value === 'value2') {
+                    state.currentBatchIndex = 0;
+                    state.jsonData = [];
+                    $('.row').empty();
+
+                    // Sort by stars and process
+                    state.jsonData = Object.values(state.resultJsonMap)
+                        .filter(item => item && typeof item.stars === 'number')
+                        .sort((a, b) => (b.stars || 0) - (a.stars || 0));
+
+                    await processBatch();
+                }
+            });
+        }
+    }
+
+    // Enhanced batch processing
+    async function processBatch() {
+        console.log('Processing batch');
+
+        if (state.currentBatchIndex >= state.jsonData.length) {
             console.log('No more data to process');
             return;
         }
 
-        const div_gallery_content = document.createElement('div');
-        div_gallery_content.className = 'gallery-content';
-        div_gallery_content.style.cssText = 'position: fixed; top: 0; left: 0; width: 1px; height: 1px; border: 0; visibility: hidden;';
-        document.body.appendChild(div_gallery_content);
+        const divGalleryContent = document.createElement('div');
+        divGalleryContent.className = 'gallery-content';
+        divGalleryContent.style.cssText = 'position: fixed; top: 0; left: 0; width: 1px; height: 1px; border: 0; visibility: hidden;';
+        document.body.appendChild(divGalleryContent);
 
-        const dataBatch = jsonData.slice(currentBatchIndex, currentBatchIndex + batchSize);
-        currentBatchIndex += batchSize;
+        try {
+            const dataBatch = state.jsonData.slice(state.currentBatchIndex, state.currentBatchIndex + CONFIG.BATCH_SIZE);
+            state.currentBatchIndex += CONFIG.BATCH_SIZE;
 
-        const fetchPromises = dataBatch.map(item => {
-            const id = item.id;
-            const stars = item.stars || 0;
-            const url = `https://ltn.gold-usergeneratedcontent.net/galleryblock/${id}.html`;
+            const fetchPromises = dataBatch.map(async (item) => {
+                const id = item.id;
+                const stars = item.stars || 0;
+                const url = `https://ltn.gold-usergeneratedcontent.net/galleryblock/${id}.html`;
 
-            return $.get(url).then(function(html) {
-                html = typeof rewrite_tn_paths === 'function' ? rewrite_tn_paths(html) : html;
-                const domElements = $.parseHTML(html);
-                const container = document.createElement('div');
-                container.append(...domElements);
-                div_gallery_content.appendChild(container);
+                try {
+                    const response = await $.get(url);
+                    let html = typeof rewrite_tn_paths === 'function' ? rewrite_tn_paths(response) : response;
 
-                if ('loading' in HTMLImageElement.prototype && typeof flip_lazy_images === 'function') {
-                    flip_lazy_images();
+                    const domElements = $.parseHTML(html);
+                    const container = document.createElement('div');
+                    container.append(...domElements);
+                    divGalleryContent.appendChild(container);
+
+                    // Apply post-processing functions if available
+                    if ('loading' in HTMLImageElement.prototype && typeof flip_lazy_images === 'function') {
+                        flip_lazy_images();
+                    }
+                    if (typeof moveimages === 'function') moveimages();
+                    if (typeof localDates === 'function') localDates();
+                    if (typeof limitLists === 'function') limitLists();
+
+                    return { container, stars };
+                } catch (error) {
+                    console.error(`Failed to fetch HTML from ${url}:`, error);
+                    return null;
                 }
-                if (typeof moveimages === 'function') {
-                    moveimages();
-                }
-                if (typeof localDates === 'function') {
-                    localDates();
-                }
-                if (typeof limitLists === 'function') {
-                    limitLists();
-                }
-
-                return { container, stars };
-            }).fail(function() {
-                console.error(`Failed to fetch HTML from ${url}`);
-                return null;
             });
-        });
 
-        await Promise.all(fetchPromises).then(results => {
-            const validClasses = ['dj', 'cg', 'acg', 'manga', 'anime', 'imageset'];
-            results.forEach(result => {
-                if (!result) return;
-                const { container, stars } = result;
-                const galleryItems = Array.from(container.children).filter(element =>
-                    Array.from(element.classList).some(cls => validClasses.includes(cls))
-                );
+            const results = await Promise.all(fetchPromises);
 
-                galleryItems.forEach(item => {
-                    const h1Element = item.querySelector('h1.lillie a');
-                    generateCard(
-                        h1Element ? h1Element.href : '#',
-                        h1Element ? h1Element.textContent : 'Unknown',
-                        item.querySelector('div[class$="-img1"] picture'),
-                        item.querySelectorAll('td.relatedtags ul li a'),
-                        item.querySelectorAll('td.series-list ul li a'),
-                        item.querySelector('table.dj-desc tbody tr:nth-child(3) td a') || { textContent: 'Unknown', href: '#' },
-                        item.querySelector('table.dj-desc tbody tr:nth-child(2) td a') || { textContent: 'Unknown', href: '#' },
-                        item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' },
-                        stars,
-                        resultJsonMap
+            const cardPromises = results
+                .filter(result => result !== null)
+                .flatMap(({ container, stars }) => {
+                    const galleryItems = Array.from(container.children).filter(element =>
+                        Array.from(element.classList).some(cls => state.validClasses.includes(cls))
                     );
-                });
-            });
 
-            document.body.removeChild(div_gallery_content);
+                    return galleryItems.map(item => {
+                        const h1Element = item.querySelector('h1.lillie a');
+                        return generateCard(
+                            h1Element?.href || '#',
+                            h1Element?.textContent || 'Unknown',
+                            item.querySelector('div[class$="-img1"] picture'),
+                            item.querySelectorAll('td.relatedtags ul li a'),
+                            item.querySelectorAll('td.series-list ul li a'),
+                            item.querySelector('table.dj-desc tbody tr:nth-child(3) td a') || { textContent: 'Unknown', href: '#' },
+                            item.querySelector('table.dj-desc tbody tr:nth-child(2) td a') || { textContent: 'Unknown', href: '#' },
+                            item.querySelectorAll('div.artist-list ul li a') || { textContent: 'Unknown', href: '#' },
+                            stars
+                        );
+                    });
+                });
+
+            await Promise.all(cardPromises);
+
             setupPopupEvents();
-            setupCountInputEventListeners();
+            await setupCountInputEventListeners();
             setupTagScrollEvents();
-            hasFetched = false;
-        }).catch(error => {
+            state.hasFetched = false;
+
+        } catch (error) {
             console.error('Error processing batch:', error);
-            hasFetched = false;
-        });
+            state.hasFetched = false;
+        } finally {
+            document.body.removeChild(divGalleryContent);
+        }
     }
 
-    window.onscroll = function() {
-        if (hasFetched) return;
-        if ((window.scrollY + window.innerHeight) >= document.documentElement.scrollHeight * 0.9) {
-            hasFetched = true;
-            if (jsonData.length > 0) {
-                processBatch(resultJsonMap);
-            } else {
-                loadNextPageInIframe(getNextPageUrl(), resultJsonMap);
+    // Enhanced scroll handler with debouncing
+    const debouncedScrollHandler = debounce(async () => {
+        if (state.hasFetched || !state.isInitialized) return;
+
+        const scrollPercentage = (window.scrollY + window.innerHeight) / document.documentElement.scrollHeight;
+
+        if (scrollPercentage >= CONFIG.SCROLL_THRESHOLD) {
+            state.hasFetched = true;
+
+            try {
+                if (state.jsonData.length > 0) {
+                    await processBatch();
+                } else {
+                    await loadNextPageInIframe(getNextPageUrl());
+                }
+            } catch (error) {
+                console.error('Error in scroll handler:', error);
+                state.hasFetched = false;
             }
         }
-    };
+    }, CONFIG.DEBOUNCE_DELAY);
 
+    window.addEventListener('scroll', debouncedScrollHandler, { passive: true });
+
+    // Enhanced hash change handler
     const lastUrl = [];
     window.addEventListener('hashchange', () => {
         lastUrl.push(location.hash);
@@ -818,95 +1020,104 @@
         }
     });
 
+    // Enhanced default query editor
     function setupDefaultQueryEditor() {
-        console.log('using setupDefaultQueryEditor');
+        console.log('Setting up default query editor');
         const badgesContainer = document.querySelector('.default-query-badges');
         const defaultQueryInput = document.getElementById('default-query-input');
         const saveButton = document.getElementById('save-default-btn');
 
+        if (!badgesContainer || !defaultQueryInput || !saveButton) {
+            console.error('Default query editor elements not found');
+            return;
+        }
+
         function updateBadges() {
-            console.log('using updateBadges');
             badgesContainer.innerHTML = '';
-            const queryParts = defaultQuery.split(' ').filter(part => part.trim());
+            const queryParts = state.defaultQuery.split(' ').filter(part => part.trim());
+
             queryParts.forEach(part => {
                 const badge = document.createElement('span');
-                if (part.match(/^-/)) {
-                    badge.className = 'badge bg-danger d-flex align-items-center';
-                } else {
-                    badge.className = 'badge bg-success d-flex align-items-center';
-                }
+                badge.className = part.match(/^-/) ?
+                    'badge bg-danger d-flex align-items-center' :
+                    'badge bg-success d-flex align-items-center';
                 badge.innerHTML = `${part} <button type="button" class="btn-close btn-close-white ms-1" aria-label="Remove"></button>`;
                 badgesContainer.appendChild(badge);
 
                 badge.querySelector('.btn-close').addEventListener('click', () => {
-                    defaultQuery = defaultQuery.split(' ').filter(p => p !== part).join(' ');
+                    state.defaultQuery = state.defaultQuery.split(' ').filter(p => p !== part).join(' ');
                     updateBadges();
                     updateUrl();
-                    savequery();
+                    saveQuery();
                 });
             });
         }
 
         function updateUrl() {
-            console.log('using updateUrl');
-            const newDefaultUrl = `https://hitomi.la/search.html?${encodeURI(defaultQuery)}`;
-            document.querySelector('.navbar-brand').href = newDefaultUrl;
-            default_url = newDefaultUrl;
+            const newDefaultUrl = state.defaultQuery ?
+                `https://hitomi.la/search.html?${encodeURI(state.defaultQuery)}` :
+                'https://hitomi.la/';
+            const navbarBrand = document.querySelector('.navbar-brand');
+            if (navbarBrand) {
+                navbarBrand.href = newDefaultUrl;
+            }
         }
 
-        function savequery() {
-            console.log('using savequery');
-            localStorage.setItem('hitomiDefaultQuery', defaultQuery);
-            savePageCountToStorage(); // ページカウントも保存
-            console.log('Default query saved:', defaultQuery);
+        function saveQuery() {
+            localStorage.setItem('hitomiDefaultQuery', state.defaultQuery);
+            savePageCountToStorage();
+            console.log('Default query saved:', state.defaultQuery);
             saveButton.textContent = 'Saved!';
             setTimeout(() => saveButton.textContent = 'Save', 1000);
         }
 
-        function addquery() {
-            console.log('using addquery');
-            defaultQuery += ` ${defaultQueryInput.value.trim()}`;
-            defaultQueryInput.value = '';
-            updateBadges();
-            updateUrl();
-            savequery();
+        function addQuery() {
+            const inputValue = defaultQueryInput.value.trim();
+            if (inputValue) {
+                state.defaultQuery += state.defaultQuery ? ` ${inputValue}` : inputValue;
+                defaultQueryInput.value = '';
+                updateBadges();
+                updateUrl();
+                saveQuery();
+            }
         }
 
         defaultQueryInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter' && defaultQueryInput.value.trim()) {
-                addquery();
+            if (e.key === 'Enter') {
+                addQuery();
             }
         });
 
         saveButton.addEventListener('click', () => {
-            if (defaultQueryInput.value.trim()) {
-                defaultQuery += ` ${defaultQueryInput.value.trim()}`;
-                defaultQueryInput.value = '';
-                updateBadges();
-                updateUrl();
-            }
-            savequery();
+            addQuery();
         });
 
         updateBadges();
     }
 
+    // Enhanced search setup
     function setupSearch() {
-        console.log('using setupSearch');
+        console.log('Setting up search');
         const input = document.getElementById('query-input');
         const form = document.querySelector('form[role="search"]');
         const stickyNavbar = document.querySelector('.sticky-navbar');
 
-        input.addEventListener("focus", function() {
+        if (!input || !form || !stickyNavbar) {
+            console.error('Search elements not found');
+            return;
+        }
+
+        input.addEventListener("focus", () => {
             stickyNavbar.classList.add('sticky-navbar--static');
             stickyNavbar.classList.remove('sticky-navbar');
         });
 
-        input.addEventListener("blur", function() {
+        input.addEventListener("blur", () => {
             stickyNavbar.classList.remove('sticky-navbar--static');
             stickyNavbar.classList.add('sticky-navbar');
         });
 
+        // Create hidden suggestions container
         const hiddenSuggestions = document.createElement('ul');
         hiddenSuggestions.id = 'search-suggestions';
         hiddenSuggestions.style.display = 'none';
@@ -917,7 +1128,8 @@
         form.appendChild(suggestionsContainer);
 
         const updateSuggestionsVisibility = () => {
-            suggestionsContainer.classList.toggle('show', suggestionsContainer.children.length > 0 && input === document.activeElement);
+            suggestionsContainer.classList.toggle('show',
+                suggestionsContainer.children.length > 0 && input === document.activeElement);
         };
 
         let committedValue = '';
@@ -926,6 +1138,7 @@
         const updateDropdown = () => {
             suggestionsContainer.innerHTML = '';
             const suggestions = hiddenSuggestions.children;
+
             Array.from(suggestions).forEach(suggestion => {
                 const item = document.createElement('a');
                 item.className = 'dropdown-item d-flex justify-content-between align-items-center text-wrap';
@@ -946,17 +1159,18 @@
                 item.addEventListener('click', (e) => {
                     e.preventDefault();
                     const searchString = suggestion.querySelector('.search-result')?.textContent || '';
-                    const re_ns = /\((.*)\)$/;
-                    const tagMatch = searchNs.match(re_ns);
-                    const tag = tagMatch ? tagMatch[1] : '';
-                    const input_value = encode_search_query_for_url(tag + ":" + searchString);
+                    const reNs = /\((.*)\)$/;
+                    const tagMatch = searchNs.match(reNs);
+                    const tag = tagMatch?.[1] || '';
+                    const inputValue = encode_search_query_for_url(`${tag}:${searchString}`);
 
                     if (searchString && tag) {
                         const currentValue = input.value.trim();
                         if (lastInput && currentValue.endsWith(lastInput)) {
-                            input.value = currentValue.slice(0, -lastInput.length).trim() + (committedValue ? ' ' : '') + input_value;
+                            input.value = currentValue.slice(0, -lastInput.length).trim() +
+                                (committedValue ? ' ' : '') + inputValue;
                         } else {
-                            input.value = committedValue + (committedValue ? ' ' : '') + input_value;
+                            input.value = committedValue + (committedValue ? ' ' : '') + inputValue;
                         }
                         committedValue = input.value;
                         lastInput = '';
@@ -969,7 +1183,7 @@
             updateSuggestionsVisibility();
         };
 
-        input.addEventListener('input', () => {
+        const debouncedInputHandler = debounce(() => {
             const currentValue = input.value.trim();
             if (!currentValue) {
                 lastInput = '';
@@ -977,16 +1191,23 @@
             } else {
                 lastInput = currentValue.slice(committedValue.length).trim();
             }
-            handle_keyup_in_search_box();
-            setTimeout(updateDropdown, 50);
-        });
 
+            if (typeof handle_keyup_in_search_box === 'function') {
+                handle_keyup_in_search_box();
+            }
+
+            setTimeout(updateDropdown, 50);
+        }, CONFIG.DEBOUNCE_DELAY);
+
+        input.addEventListener('input', debouncedInputHandler);
         input.addEventListener('focus', updateSuggestionsVisibility);
         input.addEventListener('blur', () => setTimeout(updateSuggestionsVisibility, 100));
 
         const handleSearchQuery = () => {
             const userQuery = input.value.trim();
-            const combinedQuery = userQuery ? `${defaultQuery} ${userQuery}` : defaultQuery;
+            const combinedQuery = userQuery ?
+                `${state.defaultQuery} ${userQuery}` :
+                state.defaultQuery;
             window.location.href = `https://hitomi.la/search.html?${encodeURI(combinedQuery)}`;
         };
 
@@ -1002,53 +1223,53 @@
             handleSearchQuery();
         });
 
-        new MutationObserver(updateDropdown).observe(hiddenSuggestions, { childList: true, subtree: true });
+        new MutationObserver(updateDropdown).observe(hiddenSuggestions, {
+            childList: true,
+            subtree: true
+        });
     }
 
+    // Enhanced tag picker
     function setupTagPicker() {
-        console.log('using setupTagPicker');
+        console.log('Setting up tag picker');
         const pickerBtn = document.getElementById('tag-picker-btn');
         const addBtn = document.getElementById('add-tag-btn');
         const excludeBtn = document.getElementById('exclude-tag-btn');
+
+        if (!pickerBtn || !addBtn || !excludeBtn) {
+            console.error('Tag picker elements not found');
+            return;
+        }
+
         let isPickerActive = false;
         let selectedTag = null;
         let selectedType = null;
 
         function updatePickerButton(btn, active) {
-            console.log('using updatePickerButton');
-            btn.innerHTML = 'Select Tag or Type';
+            btn.innerHTML = active ? 'Select Tag or Type' : '';
             const icon = document.createElement('i');
             icon.className = 'bi bi-eyedropper';
             icon.style.marginLeft = '5px';
-            if (!active) {
-                btn.innerHTML = '';
-            }
             btn.appendChild(icon);
         }
 
         function extractTagFromHref(href) {
-            console.log('using extractTagFromHref');
-            console.log(defaultQuery);
-            console.log(href);
             const match = href.match(/\/tag\/(.*)-all.html/) || href.match(/.*%20(.*)/);
-            console.log(match);
             return match ? encode_search_query_for_url(decodeURIComponent(match[1])) : null;
         }
 
         function extractTypeFromTable(a) {
-            console.log('using extractTypeFromTable');
             const hrefValue = a.getAttribute('href');
-            console.log(hrefValue);
             let match;
 
             match = hrefValue.match(/^https:\/\/hitomi\.la\/(.*)\/(.*)-all\.html$/);
             if (match) {
-                return match[1] + ':' + encode_search_query_for_url(decodeURIComponent(match[2]));
+                return `${match[1]}:${encode_search_query_for_url(decodeURIComponent(match[2]))}`;
             }
 
             match = hrefValue.match(/^https:\/\/hitomi\.la\/index-(.*)\.html$/);
             if (match) {
-                return 'language:' + match[1];
+                return `language:${match[1]}`;
             }
 
             match = hrefValue.match(/.* (.*)/);
@@ -1056,34 +1277,39 @@
                 return match[1];
             }
 
-            console.log('No match found for href:', hrefValue);
             return null;
         }
 
         function updateDefaultQueryUI() {
-            console.log('using updateDefaultQueryUI');
             const badgesContainer = document.querySelector('.default-query-badges');
+            if (!badgesContainer) return;
+
             badgesContainer.innerHTML = '';
-            const queryParts = defaultQuery.split(' ').filter(part => part.trim());
+            const queryParts = state.defaultQuery.split(' ').filter(part => part.trim());
+
             queryParts.forEach(part => {
                 const badge = document.createElement('span');
-                if (part.match(/^-/)) {
-                    badge.className = 'badge bg-danger d-flex align-items-center';
-                } else {
-                    badge.className = 'badge bg-success d-flex align-items-center';
-                }
+                badge.className = part.match(/^-/) ?
+                    'badge bg-danger d-flex align-items-center' :
+                    'badge bg-success d-flex align-items-center';
                 badge.innerHTML = `${part} <button type="button" class="btn-close btn-close-white ms-1" aria-label="Remove"></button>`;
                 badgesContainer.appendChild(badge);
+
                 badge.querySelector('.btn-close').addEventListener('click', () => {
-                    defaultQuery = defaultQuery.split(' ').filter(p => p !== part).join(' ');
+                    state.defaultQuery = state.defaultQuery.split(' ').filter(p => p !== part).join(' ');
                     updateDefaultQueryUI();
-                    default_url = `https://hitomi.la/search.html?${encodeURI(defaultQuery)}`;
-                    document.querySelector('.navbar-brand').href = default_url;
-                    localStorage.setItem('hitomiDefaultQuery', defaultQuery);
+
+                    const defaultUrl = getDefaultUrl();
+                    const navbarBrand = document.querySelector('.navbar-brand');
+                    if (navbarBrand) navbarBrand.href = defaultUrl;
+
+                    localStorage.setItem('hitomiDefaultQuery', state.defaultQuery);
                 });
             });
-            default_url = `https://hitomi.la/search.html?${encodeURI(defaultQuery)}`;
-            document.querySelector('.navbar-brand').href = default_url;
+
+            const defaultUrl = getDefaultUrl();
+            const navbarBrand = document.querySelector('.navbar-brand');
+            if (navbarBrand) navbarBrand.href = defaultUrl;
         }
 
         pickerBtn.addEventListener('click', () => {
@@ -1093,27 +1319,30 @@
             addBtn.disabled = !isPickerActive;
             excludeBtn.disabled = !isPickerActive;
 
-            if (!isPickerActive && (selectedTag || selectedType)) {
-                if (selectedTag) selectedTag.classList.remove('highlighted-tag');
-                if (selectedType) selectedType.classList.remove('highlighted-tag');
-                selectedTag = null;
-                selectedType = null;
+            if (!isPickerActive) {
+                if (selectedTag) {
+                    selectedTag.classList.remove('highlighted-tag');
+                    selectedTag = null;
+                }
+                if (selectedType) {
+                    selectedType.classList.remove('highlighted-tag');
+                    selectedType = null;
+                }
             }
         });
 
         document.addEventListener('click', (e) => {
             if (!isPickerActive) return;
+
             const tag = e.target.closest('.tags-container .badge');
             if (tag) {
                 e.preventDefault();
                 if (selectedTag) selectedTag.classList.remove('highlighted-tag');
                 tag.classList.add('highlighted-tag');
                 selectedTag = tag;
+                return;
             }
-        });
 
-        document.addEventListener('click', (e) => {
-            if (!isPickerActive) return;
             const type = e.target.closest('table tr td a');
             if (type) {
                 e.preventDefault();
@@ -1124,63 +1353,98 @@
         });
 
         addBtn.addEventListener('click', () => {
+            let textToAdd = null;
+
             if (selectedTag) {
-                const tagText = extractTagFromHref(selectedTag.href);
-                if (tagText && !defaultQuery.includes(tagText)) {
-                    defaultQuery += defaultQuery ? ` ${tagText}` : tagText;
-                    localStorage.setItem('hitomiDefaultQuery', defaultQuery);
-                    updateDefaultQueryUI();
-                }
+                textToAdd = extractTagFromHref(selectedTag.href);
                 selectedTag.classList.remove('highlighted-tag');
                 selectedTag = null;
             } else if (selectedType) {
-                const typeText = extractTypeFromTable(selectedType);
-                if (typeText && !defaultQuery.includes(typeText)) {
-                    defaultQuery += defaultQuery ? ` ${typeText}` : typeText;
-                    localStorage.setItem('hitomiDefaultQuery', defaultQuery);
-                    updateDefaultQueryUI();
-                }
+                textToAdd = extractTypeFromTable(selectedType);
                 selectedType.classList.remove('highlighted-tag');
                 selectedType = null;
+            }
+
+            if (textToAdd && !state.defaultQuery.includes(textToAdd)) {
+                state.defaultQuery += state.defaultQuery ? ` ${textToAdd}` : textToAdd;
+                localStorage.setItem('hitomiDefaultQuery', state.defaultQuery);
+                updateDefaultQueryUI();
             }
         });
 
         excludeBtn.addEventListener('click', () => {
+            let textToExclude = null;
+
             if (selectedTag) {
-                const tagText = extractTagFromHref(selectedTag.href);
-                if (tagText) {
-                    const excludeText = `-${tagText}`;
-                    if (!defaultQuery.includes(excludeText)) {
-                        defaultQuery += defaultQuery ? ` ${excludeText}` : excludeText;
-                        localStorage.setItem('hitomiDefaultQuery', defaultQuery);
-                        updateDefaultQueryUI();
-                    }
-                }
+                textToExclude = extractTagFromHref(selectedTag.href);
                 selectedTag.classList.remove('highlighted-tag');
                 selectedTag = null;
             } else if (selectedType) {
-                const typeText = extractTypeFromTable(selectedType);
-                if (typeText) {
-                    const excludeText = `-${typeText}`;
-                    if (!defaultQuery.includes(excludeText)) {
-                        defaultQuery += defaultQuery ? ` ${excludeText}` : excludeText;
-                        localStorage.setItem('hitomiDefaultQuery', defaultQuery);
-                        updateDefaultQueryUI();
-                    }
-                }
+                textToExclude = extractTypeFromTable(selectedType);
                 selectedType.classList.remove('highlighted-tag');
                 selectedType = null;
+            }
+
+            if (textToExclude) {
+                const excludeText = `-${textToExclude}`;
+                if (!state.defaultQuery.includes(excludeText)) {
+                    state.defaultQuery += state.defaultQuery ? ` ${excludeText}` : excludeText;
+                    localStorage.setItem('hitomiDefaultQuery', state.defaultQuery);
+                    updateDefaultQueryUI();
+                }
             }
         });
 
         updatePickerButton(pickerBtn, isPickerActive);
     }
 
-    await initializePage(resultJsonMap);
-    setupSearch();
-    setupDefaultQueryEditor();
-    loadNextPageInIframe(getNextPageUrl(), resultJsonMap);
-    setupPopupEvents();
-    setupCountInputEventListeners();
-    setupCustomSort(resultJsonMap);
+    // Enhanced main initialization
+    async function main() {
+        console.log('Starting Hitomi Enhanced (Optimized)');
+
+        try {
+            // Check if we need to redirect to default query
+            const defaultUrl = getDefaultUrl();
+            if (state.defaultQuery && window.location.href === 'https://hitomi.la/') {
+                window.location.href = defaultUrl;
+                return;
+            }
+
+            // Initialize data concurrently
+            console.log('Loading JSON data...');
+            const [resultJsonMap, hitomiJsonMap] = await Promise.all([
+                getCachedJson(false),
+                getCachedJson(true)
+            ]);
+
+            state.resultJsonMap = resultJsonMap;
+            state.hitomiJsonMap = hitomiJsonMap;
+
+            console.log('JSON data loaded successfully');
+
+            // Initialize page
+            await initializePage();
+
+            // Setup all features
+            setupSearch();
+            setupDefaultQueryEditor();
+            await setupCustomSort();
+
+            // Load first additional page
+            try {
+                await loadNextPageInIframe(getNextPageUrl());
+            } catch (error) {
+                console.warn('Failed to load first additional page:', error);
+            }
+
+            console.log('Hitomi Enhanced initialization completed successfully');
+
+        } catch (error) {
+            console.error('Fatal error during initialization:', error);
+        }
+    }
+
+    // Start the application
+    await main();
+
 })();
