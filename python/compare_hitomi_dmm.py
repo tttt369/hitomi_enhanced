@@ -6,6 +6,7 @@ import aiohttp
 import aiofiles
 from lxml import etree
 from lxml import html
+import urllib.parse
 from aiohttp import ClientResponseError
 from typing import Optional, Dict, Any
 
@@ -15,32 +16,29 @@ READ_LOCAL_SITEMAP = True
 DOWNLOAD_JS = True
 READ_LOCAL_JS = True
 HITOMI_READ_FROM_OUTPUT = True
-DMM_READ_FROM_OUTPUT = True
+JAVY_READ_FROM_OUTPUT = True
 
-SITEMAP_DIR = "../urls/sitemap"
+JAVY_SITEMAP_DIR = "../urls/sitemap/javy"
+HITOMI_SITEMAP_DIR = "../urls/sitemap/hitomi"
 LOCAL_JS_DIR = "../urls/id_js"
 HITOMI_JSON_PATH = "../urls/hitomi_data.json"
-DMM_JSON_PATH = "../urls/dmm_data.json"
+JAVY_JSON_PATH = "../urls/javy_data.json"
 RESULT_JSON_PATH = "../urls/result.json"
 HITOMI_SITEMAP_INDEX_URL = "https://ltn.gold-usergeneratedcontent.net/sitemap.xml"
-DMM_SITEMAP_INDEX_URL = "https://www.dmm.co.jp/dc/doujin/sitemap_image.xml"
+JAVY_SITEMAP_INDEX_URL = "https://javy.jp/sitemap.xml"
 AGE_CHECK_URL = 'https://www.dmm.co.jp/age_check/=/declared=yes/?rurl=https%3A%2F%2Fgames.dmm.co.jp%2Flist%2Fpc'
 SEARCH_STRING = "%65E5%672C%8A9E"  # 日本語
-DMM_SITEMAP_BATCH_SIZE = 10
+JAVY_SITEMAP_BATCH_SIZE = 10
 HITOMI_SITEMAP_BATCH_SIZE = 10
 JS_BATCH_SIZE = 500
 ID_REGEX = re.compile(r'%2D(\d+)\.html$')
 JSON_REGEX = re.compile(r'^var galleryinfo = ({.*})$', re.MULTILINE)
-HITOMI_NS = {
+NS = {
     "sitemap": "http://www.sitemaps.org/schemas/sitemap/0.9",
     "urlset": "http://www.sitemaps.org/schemas/sitemap/0.9"
 }
-DMM_NS = {
-    "default": "http://www.sitemaps.org/schemas/sitemap/0.9",
-    "image": "http://www.google.com/schemas/sitemap-image/1.1"
-}
-
-os.makedirs(LOCAL_JS_DIR, exist_ok=True)
+if DOWNLOAD_JS:
+    os.makedirs(LOCAL_JS_DIR, exist_ok=True)
 
 async def load_local_json(json_path: str) -> Dict[str, Any]:
     if os.path.isfile(json_path):
@@ -50,51 +48,62 @@ async def load_local_json(json_path: str) -> Dict[str, Any]:
         return data
     return {}
 
-async def process_sitemap_index(session, sitemap_index: str, dir: str, dmm: bool = False) -> list[str]:
-    sitemap_index_content = await get_sitemap_content(session, sitemap_index, dir)
-    root = etree.fromstring(sitemap_index_content)
-    if dmm:
-        sitemap_urls = [loc.text for loc in root.findall(".//default:loc", DMM_NS)]
-        print("Found", len(sitemap_urls), "dmm sitemaps.")
+async def process_sitemap_index(session, javy: bool = False) -> list[str]:
+    if javy:
+        sitemap_index_content = await get_sitemap_content(session, JAVY_SITEMAP_INDEX_URL, JAVY_SITEMAP_DIR)
+        root = etree.fromstring(sitemap_index_content)
+        pattern = re.compile(r"^https:\/\/javy\.jp\/sitemap\/doujin\/doujin\/doujin_\d*\.xml$")
+        sitemap_urls = [loc.text for loc in root.findall(".//sitemap:loc", NS) if pattern.match(loc.text)]
+        print("Found", len(sitemap_urls), "javy sitemaps.")
     else:
-        sitemap_urls = [loc.text for loc in root.findall(".//sitemap:loc", HITOMI_NS)]
+        sitemap_index_content = await get_sitemap_content(session, HITOMI_SITEMAP_INDEX_URL, HITOMI_SITEMAP_DIR)
+        root = etree.fromstring(sitemap_index_content)
+        sitemap_urls = [loc.text for loc in root.findall(".//sitemap:loc", NS)]
         print("Found", len(sitemap_urls), "hitomi sitemaps.")
     return sitemap_urls
 
-async def process_sitemap(session, sitemap_urls: list[str], sitemap_batch: int, dmm: bool = False):
+async def process_sitemap(session, sitemap_urls: list[str], javy: bool = False):
     count = 0
+    dir = ""
+    sitemap_batch = 0
+
+    if javy:
+        dir = JAVY_SITEMAP_DIR
+        sitemap_batch = JAVY_SITEMAP_BATCH_SIZE
+    else:
+        dir = HITOMI_SITEMAP_DIR
+        sitemap_batch = HITOMI_SITEMAP_BATCH_SIZE
+
     for i in range(0, len(sitemap_urls), sitemap_batch):
         batch = sitemap_urls[i:(i + sitemap_batch)]
         print(f"{i} // {len(sitemap_urls)}")
-        tasks = [get_sitemap_content(session, url, SITEMAP_DIR) for url in batch]
+        tasks = [get_sitemap_content(session, url, dir) for url in batch]
         results = await asyncio.gather(*tasks)
 
         for content, sitemap_url in zip(results, batch):
-            if dmm:
-                if b'\x03' in content:
-                    print("Found x03 character in dmmsitemap:", os.path.basename(sitemap_url))
-                    content = content.replace(b'\x03', b'')
-                root = etree.fromstring(content)
-                for url_elem in root.findall('.//default:url', DMM_NS):
-                    count += 1
-                    yield url_elem
-            else:
-                root = etree.fromstring(content)
-                for loc in root.findall(".//urlset:loc", HITOMI_NS):
-                    url = loc.text
-                    count += 1
-                    if SEARCH_STRING in url and ("doujinshi" in url or "manga" in url) and ID_REGEX.search(url):
-                        yield url
+            # if b'\x03' in content:
+            #     print("Found x03 character in sitemap:", os.path.basename(sitemap_url))
+            #     content = content.replace(b'\x03', b'')
+            root = etree.fromstring(content)
+            for loc in root.findall(".//urlset:loc", NS):
+                url = loc.text
+                count += 1
+                if javy:
+                    yield url
+                if SEARCH_STRING in url and ("doujinshi" in url or "manga" in url) and ID_REGEX.search(url):
+                    yield url
             print(sitemap_url)
     print("found", count)
 
-async def process_js(session, valid_gallery_urls: list[str]) -> Dict[str, Any]:
+async def make_hitomi_json(session, sitemap_generator) -> Dict[str, Any]:
     hitomi_dict = {}
     skiped = 0
-    for i in range(0, len(valid_gallery_urls), JS_BATCH_SIZE):
+    found_urls = [url async for url in sitemap_generator]
+
+    for i in range(0, len(found_urls), JS_BATCH_SIZE):
         tasks = []
-        batch = valid_gallery_urls[i:(i + JS_BATCH_SIZE)]
-        print(f"{i} // {len(valid_gallery_urls)}")
+        batch = found_urls[i:(i + JS_BATCH_SIZE)]
+        print(f"{i} // {len(found_urls)}")
         for url in batch:
             json_id = ID_REGEX.search(url).group(1)
             js_url = f"https://ltn.gold-usergeneratedcontent.net/galleries/{json_id}.js"
@@ -105,14 +114,17 @@ async def process_js(session, valid_gallery_urls: list[str]) -> Dict[str, Any]:
             if json_match:
                 data = json.loads(json_match.group(1))
                 artists = data.get("artists")
-                json_id = data.get("id")
                 artist_name = artists[0].get("artist") if isinstance(artists, list) else artists
+                json_id = data.get("id")
+                json_jtitle = data.get("japanese_title")
+                json_title = data.get("title")
+                title_key = json_jtitle if json_jtitle else json_title
                 file_count = len(data.get("files", []))
-                hitomi_dict[json_id] = {
+                hitomi_dict[title_key] = {
+                    "id": json_id,
                     "artists": artist_name,
-                    "japanese_title": data["japanese_title"],
-                    "title": data["title"],
-                    "pages": int(file_count)  # Convert to int
+                    "title": json_title,
+                    "pages": int(file_count)
                 }
             else:
                 skiped += 1
@@ -126,20 +138,25 @@ async def write_json(path: str, content: Any) -> None:
         await f.write(json.dumps(content, ensure_ascii=False, indent=4))
     print("Saved data to", path)
 
-async def make_dmm_json(found_urls) -> Dict[str, Any]:
-    dmm_dict = {}
-    async for url_elem in found_urls:
-        image_title_elem = url_elem.find('.//image:title', DMM_NS)
-        loc_elem = url_elem.find('.//default:loc', DMM_NS)
-        first_image_title = image_title_elem.text
-        loc_url = loc_elem.text
-        dmm_dict[loc_url] = {
-            "title": first_image_title
-        }
-    await write_json(DMM_JSON_PATH, dmm_dict)
-    return dmm_dict
+async def make_javy_json(found_urls) -> Dict[str, Any]:
+    javy_dict = {}
+    pattern = re.compile(r"^https:\/\/javy\.jp\/doujin\/(d_\d*)\/(.*)\/$")
 
-async def scrape_dmm(session, hitomi_dict: Dict[str, Any], dmm_dict: Dict[str, Any], url: str, hitomi_key: str) -> Dict[str, Any]:
+    async for url in found_urls:
+        match = pattern.match(url)
+        if match:
+            id = match.group(1)
+            loc_title = match.group(2)
+            decode_title = urllib.parse.unquote(loc_title)
+            javy_dict[decode_title] = {
+                "id": id,
+                "url": "https://www.dmm.co.jp/dc/doujin/-/detail/=/cid=" + id
+            }
+
+    await write_json(JAVY_JSON_PATH, javy_dict)
+    return javy_dict
+
+async def scrape_javy(session, hitomi_dict: Dict[str, Any], url: str, content_title: str) -> Dict[str, Any]:
     result_dict = {}
 
     async with session.get(url) as response:
@@ -147,8 +164,8 @@ async def scrape_dmm(session, hitomi_dict: Dict[str, Any], dmm_dict: Dict[str, A
             response.raise_for_status()
             text = await response.text()
         except ClientResponseError as e:
+            print(e)
             if e.status == 404:
-                print(url)
                 return {}
             else:
                 raise
@@ -178,19 +195,15 @@ async def scrape_dmm(session, hitomi_dict: Dict[str, Any], dmm_dict: Dict[str, A
     if stars == 0 and num_stars == 1:
         num_stars = 0
 
-    hitomi_dict[hitomi_key].update({
-        "dmm_url": url,
-        "dmm_artist_name": artist_name,
-        "dmm_title": dmm_dict[url]["title"],
+    hitomi_dict[content_title].update({
+        "javy_url": url,
+        "javy_artist_name": artist_name,
+        "javy_title": content_title,
         "stars": stars,
         "num_stars": num_stars
     })
 
-    # Structure result_dict as a list entry with "id"
-    result_dict = {
-        "id": hitomi_key,
-        **hitomi_dict[hitomi_key]
-    }
+    result_dict[content_title] = hitomi_dict[content_title]
 
     print(result_dict)
     return result_dict
@@ -244,78 +257,63 @@ async def main():
         hitomi_dict = await load_local_json(HITOMI_JSON_PATH)
     if not hitomi_dict:
         sitemap_urls = []
-        found_urls = []
         async with aiohttp.ClientSession() as session:
-            sitemap_urls = await process_sitemap_index(session, HITOMI_SITEMAP_INDEX_URL, SITEMAP_DIR)
-            async for url in process_sitemap(session, sitemap_urls, HITOMI_SITEMAP_BATCH_SIZE):
-                found_urls.append(url)
-            hitomi_dict = await process_js(session, found_urls)
+            sitemap_urls = await process_sitemap_index(session)
+            hitomi_dict = await make_hitomi_json(session, process_sitemap(session, sitemap_urls))
 
-    dmm_dict = {}
-    if DMM_READ_FROM_OUTPUT:
-        dmm_dict = await load_local_json(DMM_JSON_PATH)
-    if not dmm_dict:
+    javy_dict = {}
+    if JAVY_READ_FROM_OUTPUT:
+        javy_dict = await load_local_json(JAVY_JSON_PATH)
+    if not javy_dict:
         sitemap_urls = []
         async with aiohttp.ClientSession() as session:
-            sitemap_urls = await process_sitemap_index(session, DMM_SITEMAP_INDEX_URL, SITEMAP_DIR, dmm=True)
-            dmm_dict = await make_dmm_json(process_sitemap(session, sitemap_urls, DMM_SITEMAP_BATCH_SIZE, dmm=True))
+            sitemap_urls = await process_sitemap_index(session, javy=True)
+            javy_dict = await make_javy_json(process_sitemap(session, sitemap_urls, javy=True))
 
-    hitomi_title_map = {}
-    for hitomi_key, hitomi_value in hitomi_dict.items():
-        title = hitomi_value.get("japanese_title") or hitomi_value.get("title")
-        if title:
-            title = title.replace(" ", "")
-            hitomi_title_map.setdefault(title, []).append(hitomi_key)
-
-    # Deduplicate matched_dmm_urls based on dmm_title
-    matched_dmm_urls = []
+    hitomi_title_map = {title.replace(" ", ""): title for title in hitomi_dict.keys()}
+    matched_javy_urls = []
     seen_titles = set()
-    for dmm_key, dmm_value in dmm_dict.items():
-        dmm_title = dmm_value.get("title")
-        dmm_title = dmm_title.replace(" ", "")
-        if dmm_title in hitomi_title_map and dmm_title not in seen_titles:
-            seen_titles.add(dmm_title)
-            # Take the first hitomi_key for this title to avoid duplicates
-            hitomi_key = hitomi_title_map[dmm_title][0]
-            matched_dmm_urls.append((dmm_key, hitomi_key))
 
-    result_list = []
+    for javy_title, javy_data in javy_dict.items():
+        javy_title_clean = javy_title.replace(" ", "")
+        if javy_title_clean in hitomi_title_map and javy_title not in seen_titles:
+            seen_titles.add(javy_title)
+            url = javy_data["url"]
+            title = hitomi_title_map.get(javy_title_clean)
+            matched_javy_urls.append((url, title))
+
+    # continue from existing
+    result_dict = {}
     if os.path.exists(RESULT_JSON_PATH):
         existing_data = await load_local_json(RESULT_JSON_PATH)
         if existing_data:
-            # Convert existing data to list format if it's a dict
-            if isinstance(existing_data, dict):
-                existing_data = [{"id": k, **v} for k, v in existing_data.items()]
-            result_list = existing_data
-            # Update seen_titles with existing DMM titles
             seen_titles = set()
-            seen_titles.update(item["dmm_title"].replace(" ", "") for item in result_list)
-            # Filter out already processed URLs
-            matched_dmm_urls = [
-                (url, id) for url, id in matched_dmm_urls
-                if dmm_dict[url]["title"].replace(" ", "") not in seen_titles
+            seen_titles.update(item["javy_url"] for item in existing_data.values())
+            matched_javy_urls = [
+                (url, id) for url, id in matched_javy_urls
+                if url not in seen_titles
             ]
-            print("continue from", len(result_list))
+            print("continue from", len(existing_data))
 
     async with aiohttp.ClientSession() as session:
         session.cookie_jar.update_cookies({'age_check_done': '1'})
         async with session.get(AGE_CHECK_URL) as resp:
             await resp.text()
-        for i in range(0, len(matched_dmm_urls), 15):
-            batch = matched_dmm_urls[i:i+15]
+        for i in range(0, len(matched_javy_urls), 15):
+            batch = matched_javy_urls[i:(i+15)]
             tasks = [
-                scrape_dmm(session, hitomi_dict, dmm_dict, url, id)
-                for url, id in batch
+                scrape_javy(session, hitomi_dict, url, title)
+                for url, title in batch
             ]
             batch_results = await asyncio.gather(*tasks)
             for res in batch_results:
-                if res:  # Only append non-empty results
-                    result_list.append(res)
-            # Sort by stars * num_stars in descending order
-            result_list = sorted(result_list, key=lambda x: x["stars"] * x["num_stars"], reverse=True)
-            await write_json(RESULT_JSON_PATH, result_list)
-    await write_json(RESULT_JSON_PATH, result_list)
-    # print(result_list)
+                if res:
+                    result_dict.update(res)
+            await write_json(RESULT_JSON_PATH, result_dict)
+
+        sorted_items = sorted(result_dict.items(), key=lambda x: x[1]["stars"] * x[1]["num_stars"], reverse=True)
+        sorted_data = {key: value for key, value in sorted_items}
+        await write_json(RESULT_JSON_PATH, sorted_data)
 
 if __name__ == "__main__":
     asyncio.run(main())
